@@ -1,16 +1,13 @@
 #!/usr/bin/env node
-// CLI launcher: parses arguments, boots the pre-built Next.js app in-process
-// bound to 127.0.0.1, prints where it is serving and opens the browser.
-// Repository access happens inside the API routes (lib/repo-service.ts); the
-// directory to inspect is handed over through WTDIFF_CWD.
+// CLI launcher. Production: starts the bundled Node server (dist/server.mjs),
+// which serves the static UI export (out/) and the API, bound to 127.0.0.1.
+// --dev: runs `next dev` for working on wtdiff itself.
 
-import http from 'node:http';
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { fileURLToPath } from 'node:url';
-
-import next from 'next';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { openInBrowser } from './open.js';
 
@@ -89,92 +86,75 @@ if (positionals.length > 1) fail(`unexpected arguments: ${positionals.slice(1).j
 const base = values.base ?? positionals[0] ?? null;
 const cwd = values.cwd ? path.resolve(values.cwd) : process.cwd();
 const host = values.host;
-const requestedPort = values.port === undefined ? 4747 : Number(values.port);
-if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
-  fail(`invalid port: ${values.port}`);
-}
+const port = values.port === undefined ? 4747 : Number(values.port);
+if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`invalid port: ${values.port}`);
 if (!existsSync(cwd)) fail(`directory does not exist: ${cwd}`);
-if (!values.dev && !existsSync(path.join(pkgRoot, '.next', 'BUILD_ID'))) {
-  fail('no production build found. Run "npm run build" in the wtdiff package first (or use --dev).');
-}
 
-process.env.WTDIFF_CWD = cwd;
-process.env.NODE_ENV = values.dev ? 'development' : 'production';
-
-/** Listen on the requested port, falling back to a random free one unless strict. */
-function listen(server, port, strict) {
-  return new Promise((resolve, reject) => {
-    const attempt = (p) => {
-      const onError = (err) => {
-        server.off('listening', onListening);
-        if (err.code === 'EADDRINUSE' && !strict && p !== 0) return attempt(0);
-        reject(err);
-      };
-      const onListening = () => {
-        server.off('error', onError);
-        resolve(server.address().port);
-      };
-      server.once('error', onError);
-      server.once('listening', onListening);
-      server.listen(p, host);
-    };
-    attempt(port);
-  });
-}
-
-try {
-  let handle = null;
-  const server = http.createServer((req, res) => {
-    if (!handle) {
-      res.writeHead(503, { 'Content-Type': 'text/plain', 'Retry-After': '1' });
-      res.end('starting');
-      return;
-    }
-    handle(req, res);
-  });
-  const port = await listen(server, requestedPort, values['strict-port']);
-
-  const app = next({ dev: values.dev, dir: pkgRoot, hostname: host, port, quiet: !values.dev });
-  await app.prepare();
-  handle = app.getRequestHandler();
-
-  const origin = `http://${host}:${port}`;
-  const res = await fetch(`${origin}/api/repo`);
-  const info = await res.json();
-  if (!res.ok) {
-    server.close();
-    fail(info.error || `could not read repository (${res.status})`);
-  }
-
+function initialUrl(origin, currentWorktree) {
   const query = new URLSearchParams();
   if (base) query.set('base', base);
   let route = '/';
   if (values.here) {
     route = '/diff';
-    query.set('worktree', info.currentWorktree);
+    query.set('worktree', currentWorktree);
   }
   const qs = query.toString();
-  const url = `${origin}${route}${qs ? `?${qs}` : ''}`;
+  return `${origin}${route}${qs ? `?${qs}` : ''}`;
+}
 
-  process.stdout.write(
-    [
-      `Repository : ${info.repoRoot}`,
-      `Worktree   : ${info.currentWorktree}`,
-      `Worktrees  : ${info.worktrees.length}`,
-      `Base       : ${base ?? info.defaultBase ?? '(none found)'}`,
-      '',
-      `Serving at ${url}`,
-      'Press Ctrl+C to stop.',
-      '',
-    ].join('\n'),
+// ---------------------------------------------------------------------------
+// --dev: Next.js dev server with the API routes mounted
+// ---------------------------------------------------------------------------
+
+if (values.dev) {
+  const nextBin = path.join(pkgRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
+  if (!existsSync(nextBin)) fail('--dev needs the dev dependencies; run "npm install" in the wtdiff package.');
+  const child = spawn(
+    process.execPath,
+    [nextBin, 'dev', '--port', String(port), '--hostname', host],
+    { cwd: pkgRoot, stdio: 'inherit', env: { ...process.env, WTDIFF_CWD: cwd } },
   );
+  child.on('exit', (code) => process.exit(code ?? 0));
+  if (!values['no-open']) {
+    setTimeout(() => openInBrowser(initialUrl(`http://${host}:${port}`, cwd)), 3000).unref();
+  }
+} else {
+  // -------------------------------------------------------------------------
+  // Production: bundled server + static export
+  // -------------------------------------------------------------------------
+  const serverFile = path.join(pkgRoot, 'dist', 'server.mjs');
+  const staticDir = path.join(pkgRoot, 'out');
+  if (!existsSync(serverFile) || !existsSync(path.join(staticDir, 'index.html'))) {
+    fail('no build found. Run "npm run build" in the wtdiff package first (or use --dev).');
+  }
 
-  if (!values['no-open']) openInBrowser(url);
+  try {
+    const { startServer } = await import(pathToFileURL(serverFile).href);
+    const { url, info } = await startServer({ cwd, staticDir, host, port, strictPort: values['strict-port'] });
+    const fullUrl = initialUrl(url.replace(/\/$/, ''), info.currentWorktree);
 
-  const shutdown = () => process.exit(0);
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-} catch (err) {
-  if (err?.code === 'EADDRINUSE') fail(`port ${requestedPort} is already in use (drop --strict-port to pick another)`);
-  fail(err?.stack || String(err));
+    process.stdout.write(
+      [
+        `Repository : ${info.repoRoot}`,
+        `Worktree   : ${info.currentWorktree}`,
+        `Worktrees  : ${info.worktrees.length}`,
+        `Base       : ${base ?? info.defaultBase ?? '(none found)'}`,
+        '',
+        `Serving at ${fullUrl}`,
+        'Press Ctrl+C to stop.',
+        '',
+      ].join('\n'),
+    );
+
+    if (!values['no-open']) openInBrowser(fullUrl);
+
+    const shutdown = () => process.exit(0);
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  } catch (err) {
+    if (err?.name === 'GitError') fail(err.message);
+    if (err?.code === 'EADDRINUSE') fail(`port ${port} is already in use (drop --strict-port to pick another)`);
+    if (err?.code === 'ENOENT' && /git/.test(String(err.message))) fail('git executable not found on PATH');
+    fail(err?.stack || String(err));
+  }
 }
