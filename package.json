@@ -4,7 +4,7 @@
   "description": "Local web UI that lists every worktree of a git repository and shows what each worktree's branch changed against a base branch of your choice.",
   "type": "module",
   "bin": {
-    "wtdiff": "./bin/wtdiff.js"
+    "wtdiff": "bin/wtdiff.js"
   },
   "files": [
     "bin",
