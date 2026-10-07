@@ -33,6 +33,14 @@
     "cli"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hannanel100/worktree-diff-viewer.git"
+  },
+  "homepage": "https://github.com/hannanel100/worktree-diff-viewer#readme",
+  "bugs": {
+    "url": "https://github.com/hannanel100/worktree-diff-viewer/issues"
+  },
   "author": "hannanel100",
   "publishConfig": {
     "access": "public"
