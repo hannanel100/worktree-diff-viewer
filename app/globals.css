@@ -289,14 +289,38 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .diff-meta b { color: var(--fg); font-weight: 600; }
 .diff-meta code { background: var(--bg-muted); padding: 1px 5px; border-radius: 4px; }
 
-.diff-body { flex: 1; display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
+.diff-body { flex: 1; display: grid; grid-template-columns: auto 1fr; min-height: 0; }
+/* The sidebar is a push drawer: closing it hands its width to the diff pane. */
 .sidebar {
+  width: 340px;
   border-right: 1px solid var(--border);
   overflow: auto;
   background: var(--bg-muted);
   display: flex;
   flex-direction: column;
+  transition: width 0.18s ease;
 }
+.is-drawer-closed .sidebar {
+  width: 0;
+  border-right: none;
+  overflow: hidden;
+  visibility: hidden;
+}
+.sidebar > * { min-width: 340px; }
+.drawer-toggle { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.drawer-toggle .chevron { font-size: 9px; color: var(--fg-muted); }
+.toolbar-file {
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.toolbar-file::before { content: '\200E'; }
 .commits { border-bottom: 1px solid var(--border); }
 .commits summary {
   cursor: pointer; padding: 8px 12px; font-weight: 600; color: var(--fg-muted);
@@ -376,7 +400,9 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 
 @media (max-width: 900px) {
   .diff-body { grid-template-columns: 1fr; }
-  .sidebar { max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar { width: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); transition: max-height 0.18s ease; }
+  .sidebar > * { min-width: 0; }
+  .is-drawer-closed .sidebar { width: auto; max-height: 0; border-bottom: none; }
   .repo-root { display: none; }
   .base-picker input { width: 160px; }
 }

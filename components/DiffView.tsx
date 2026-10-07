@@ -13,6 +13,7 @@ import { useRepo } from './RepoProvider';
 import { MergeTags, Tag } from './Tags';
 
 const FORMAT_KEY = 'wtdiff.format';
+const DRAWER_KEY = 'wtdiff.drawer';
 
 export function DiffView() {
   const { repo, version } = useRepo();
@@ -29,6 +30,7 @@ export function DiffView() {
     () => (localStorage.getItem(FORMAT_KEY) as DiffFormat | null) ?? 'side-by-side',
   );
   const [allFiles, setAllFiles] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(() => localStorage.getItem(DRAWER_KEY) !== 'closed');
   const [filter, setFilter] = useState('');
   const [text, setText] = useState<string | null>(null);
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
@@ -148,11 +150,23 @@ export function DiffView() {
     return q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files;
   }, [files, filter]);
 
-  // --- keyboard navigation (j/k or arrows) ---------------------------------
+  const toggleDrawer = useCallback(() => {
+    setDrawerOpen((open) => {
+      localStorage.setItem(DRAWER_KEY, open ? 'closed' : 'open');
+      return !open;
+    });
+  }, []);
+
+  // --- keyboard navigation (j/k or arrows, f toggles the file drawer) -------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.matches('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'f') {
+        e.preventDefault();
+        toggleDrawer();
+        return;
+      }
       const down = e.key === 'j' || e.key === 'ArrowDown';
       const up = e.key === 'k' || e.key === 'ArrowUp';
       if (!down && !up) return;
@@ -167,7 +181,7 @@ export function DiffView() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [visibleFiles, activeFile, selectFile]);
+  }, [visibleFiles, activeFile, selectFile, toggleDrawer]);
 
   const changeFormat = (f: DiffFormat) => {
     setFormat(f);
@@ -179,6 +193,7 @@ export function DiffView() {
   if (!repo || !data) return <div className="loading">Loading diff…</div>;
 
   const wt = data.worktree;
+  const activeIndex = activeFile ? files.indexOf(activeFile) + 1 : 0;
 
   return (
     <section className="diff-view">
@@ -223,8 +238,8 @@ export function DiffView() {
         </div>
       </div>
 
-      <div className="diff-body">
-        <aside className="sidebar">
+      <div className={`diff-body${drawerOpen ? '' : ' is-drawer-closed'}`}>
+        <aside className="sidebar" id="diff-drawer" aria-hidden={!drawerOpen}>
           <details className="commits" open={data.commits.length > 0 && data.commits.length <= 8}>
             <summary>
               Commits <span className="count">({data.commits.length})</span>
@@ -290,6 +305,25 @@ export function DiffView() {
 
         <div className="content">
           <div className="toolbar">
+            <button
+              type="button"
+              className="btn btn-quiet drawer-toggle"
+              onClick={toggleDrawer}
+              aria-expanded={drawerOpen}
+              aria-controls="diff-drawer"
+              title={`${drawerOpen ? 'Hide' : 'Show'} the file list (f)`}
+            >
+              <span className="chevron" aria-hidden="true">{drawerOpen ? '◀' : '▶'}</span>
+              Files
+              {files.length > 0 && (
+                <span className="muted"> {activeIndex}/{files.length}</span>
+              )}
+            </button>
+            {!drawerOpen && activeFile && (
+              <span className="toolbar-file mono" title={activeFile.path}>
+                {activeFile.path}
+              </span>
+            )}
             <div className="seg" role="group" aria-label="Layout">
               <button type="button" className={format === 'side-by-side' ? 'is-active' : undefined} onClick={() => changeFormat('side-by-side')}>
                 Side by side

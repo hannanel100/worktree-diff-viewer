@@ -38,7 +38,9 @@ remembered in the browser.
 **Diff** – click a row to open one worktree:
 
 - the list of commits the branch has that the base lacks
-- a file list with status (A/M/D/R), filter box, `j`/`k` keyboard navigation
+- a file list with status (A/M/D/R), filter box, `j`/`k` keyboard navigation,
+  in a drawer you can collapse (toolbar button or `f`) to give the diff the
+  whole width; `j`/`k` keep working while it is closed
 - side-by-side or unified rendering with syntax highlighting (diff2html)
 - "All files" mode, and a `.patch` download of the whole diff
 
