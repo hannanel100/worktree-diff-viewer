@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Worktree Diff</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='4' cy='4' r='2.5' fill='%2360a5fa'/%3E%3Ccircle cx='12' cy='12' r='2.5' fill='%2334d399'/%3E%3Cpath d='M4 6.5v3a2.5 2.5 0 0 0 2.5 2.5h3' fill='none' stroke='%239ca3af' stroke-width='1.5'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/vendor/diff2html.min.css" />
+  <link rel="stylesheet" href="/vendor/hljs-light.min.css" media="(prefers-color-scheme: light)" />
+  <link rel="stylesheet" href="/vendor/hljs-dark.min.css" media="(prefers-color-scheme: dark)" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/overview" title="Overview of all worktrees">
+      <span class="brand-mark"></span>
+      <span class="brand-name">Worktree Diff</span>
+    </a>
+    <span class="repo-root" id="repo-root" title="Repository root"></span>
+    <form class="base-picker" id="base-form" autocomplete="off">
+      <label for="base-input">Base</label>
+      <input id="base-input" list="base-list" placeholder="branch or ref" spellcheck="false" />
+      <datalist id="base-list"></datalist>
+      <button type="submit" class="btn">Compare</button>
+    </form>
+    <button type="button" class="btn btn-quiet" id="refresh-btn" title="Reload branches and worktrees">Refresh</button>
+  </header>
+
+  <main id="main">
+    <div class="loading" id="boot">Loading repository…</div>
+  </main>
+
+  <template id="tpl-overview">
+    <section class="overview">
+      <div class="overview-head">
+        <h1>Worktrees</h1>
+        <p class="muted" data-role="subtitle"></p>
+      </div>
+      <table class="wt-table">
+        <thead>
+          <tr>
+            <th>Branch</th>
+            <th>Path</th>
+            <th class="num" title="Commits the worktree has that the base lacks / commits the base gained since the fork">Ahead / Behind</th>
+            <th title="Is this branch's work in the base yet? Detects merge commits as well as squash/rebase merges, and lists files that would conflict.">Merge</th>
+            <th class="num">Files</th>
+            <th class="num">Lines</th>
+            <th title="Edits in the worktree directory not yet committed. Not part of the diff.">Uncommitted</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody data-role="rows"></tbody>
+      </table>
+    </section>
+  </template>
+
+  <template id="tpl-diff">
+    <section class="diff-view">
+      <div class="diff-head">
+        <div class="diff-title">
+          <a href="#/overview" class="back">← Overview</a>
+          <h1 data-role="title"></h1>
+          <span class="path muted" data-role="path"></span>
+        </div>
+        <div class="diff-meta" data-role="meta"></div>
+      </div>
+      <div class="diff-body">
+        <aside class="sidebar">
+          <details class="commits" data-role="commits">
+            <summary>Commits <span class="count" data-role="commit-count"></span></summary>
+            <ol data-role="commit-list"></ol>
+          </details>
+          <div class="file-filter">
+            <input type="search" placeholder="Filter files" data-role="file-filter" spellcheck="false" />
+          </div>
+          <ul class="file-list" data-role="file-list"></ul>
+        </aside>
+        <div class="content">
+          <div class="toolbar">
+            <div class="seg" role="group" aria-label="Layout">
+              <button type="button" data-format="side-by-side">Side by side</button>
+              <button type="button" data-format="line-by-line">Unified</button>
+            </div>
+            <label class="check"><input type="checkbox" data-role="all-files" /> All files</label>
+            <span class="spacer"></span>
+            <a class="btn btn-quiet" data-role="patch-link" download>Download .patch</a>
+          </div>
+          <div class="render" data-role="render"></div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <script src="/vendor/diff2html-ui.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

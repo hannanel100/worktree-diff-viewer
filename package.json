@@ -1,0 +1,33 @@
+{
+  "name": "worktree-diff-viewer",
+  "version": "0.1.0",
+  "description": "Local web UI that lists every worktree of a git repository and shows what each worktree's branch changed against a base branch of your choice.",
+  "type": "module",
+  "bin": {
+    "wtdiff": "./bin/wtdiff.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node bin/wtdiff.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "keywords": [
+    "git",
+    "worktree",
+    "diff",
+    "review",
+    "cli"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "diff2html": "^3.4.48"
+  }
+}
