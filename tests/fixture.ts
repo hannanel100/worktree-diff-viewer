@@ -1,45 +1,63 @@
-// Builds a throwaway repository with a main worktree and a feature worktree.
+// Builds a throwaway repository with a main worktree and several branches in
+// their own worktrees:
 //
-//   main:     c1 (README, lib/a.js, assets/logo.bin, old-name.txt) -> c2 (README tweak)
-//   feature:  forks at c1 -> f1 (modify lib/a.js, add lib/b.js, delete old-name? no: rename) -> f2 (binary + delete)
-//
-// The feature worktree also gets an uncommitted edit and an untracked file so
-// tests can check those are reported separately and never folded into the diff.
+//   main:            c1 -> c2 (README) -> c3 (merge of merged-feature) -> c4 (squash of squashed)
+//   feature:         forks at c1: f1 (modify, add, rename) -> f2 (binary + delete), plus uncommitted noise
+//   merged-feature:  m1, merged into main with a merge commit
+//   squashed:        s1, whose change main received as the fresh commit c4
+//   conflict:        x1, edits the README line main changed in c2
+//   orphan:          no shared history at all
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-function git(cwd, ...args) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }).trim();
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test Author',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'Test Author',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    },
+  }).trim();
 }
 
-export function createFixture() {
+export interface Fixture {
+  root: string;
+  mainDir: string;
+  featureDir: string;
+  mergedDir: string;
+  squashedDir: string;
+  conflictDir: string;
+  orphanDir: string;
+  shas: { c1: string; c2: string; f1: string; f2: string };
+  cleanup(): void;
+}
+
+export function createFixture(): Fixture {
   // realpath expands Windows 8.3 short names (HANNAN~1) to what git prints.
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wtdiff-fixture-')));
   const mainDir = path.join(root, 'repo');
   const featureDir = path.join(root, 'wt-feature');
   fs.mkdirSync(mainDir);
 
-  const env = {
-    GIT_AUTHOR_NAME: 'Test Author',
-    GIT_AUTHOR_EMAIL: 'test@example.com',
-    GIT_COMMITTER_NAME: 'Test Author',
-    GIT_COMMITTER_EMAIL: 'test@example.com',
+  const write = (dir: string, rel: string, content: string | Buffer) => {
+    const full = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content);
   };
-  Object.assign(process.env, env);
 
   git(mainDir, 'init', '-q', '-b', 'main');
   git(mainDir, 'config', 'user.name', 'Test Author');
   git(mainDir, 'config', 'user.email', 'test@example.com');
   git(mainDir, 'config', 'core.autocrlf', 'false');
-
-  const write = (dir, rel, content) => {
-    const full = path.join(dir, rel);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content);
-  };
 
   // c1
   write(mainDir, 'README.md', '# Fixture\n\nHello.\n');
