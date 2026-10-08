@@ -14,6 +14,19 @@ import { MergeTags, Tag } from './Tags';
 
 const FORMAT_KEY = 'wtdiff.format';
 const DRAWER_KEY = 'wtdiff.drawer';
+const DRAWER_WIDTH_KEY = 'wtdiff.drawerWidth';
+const DRAWER_DEFAULT_WIDTH = 340;
+const DRAWER_MIN_WIDTH = 200;
+
+function clampDrawerWidth(w: number): number {
+  const max = Math.max(DRAWER_MIN_WIDTH, Math.floor(window.innerWidth * 0.7));
+  return Math.min(max, Math.max(DRAWER_MIN_WIDTH, Math.round(w)));
+}
+
+function loadDrawerWidth(): number {
+  const stored = Number(localStorage.getItem(DRAWER_WIDTH_KEY));
+  return Number.isFinite(stored) && stored > 0 ? clampDrawerWidth(stored) : DRAWER_DEFAULT_WIDTH;
+}
 
 export function DiffView() {
   const { repo, version } = useRepo();
@@ -31,6 +44,11 @@ export function DiffView() {
   );
   const [allFiles, setAllFiles] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState<boolean>(() => localStorage.getItem(DRAWER_KEY) !== 'closed');
+  const [drawerWidth, setDrawerWidth] = useState<number>(loadDrawerWidth);
+  const [resizing, setResizing] = useState(false);
+  const drawerWidthRef = useRef(drawerWidth);
+  drawerWidthRef.current = drawerWidth;
+  const sidebarRef = useRef<HTMLElement>(null);
   const [filter, setFilter] = useState('');
   const [text, setText] = useState<string | null>(null);
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
@@ -157,6 +175,58 @@ export function DiffView() {
     });
   }, []);
 
+  const applyDrawerWidth = useCallback((w: number) => {
+    const next = clampDrawerWidth(w);
+    setDrawerWidth(next);
+    localStorage.setItem(DRAWER_WIDTH_KEY, String(next));
+  }, []);
+
+  // --- drawer resize: drag the handle, double-click to fit the longest name --
+  const onHandlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const handle = e.currentTarget;
+      const startX = e.clientX;
+      const startWidth = drawerWidthRef.current;
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic events have no real pointer to capture */
+      }
+      setResizing(true);
+      const onMove = (ev: PointerEvent) => setDrawerWidth(clampDrawerWidth(startWidth + ev.clientX - startX));
+      const onUp = () => {
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        setResizing(false);
+        applyDrawerWidth(drawerWidthRef.current);
+      };
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    },
+    [applyDrawerWidth],
+  );
+
+  const fitDrawerToNames = useCallback(() => {
+    const items = sidebarRef.current?.querySelectorAll<HTMLLIElement>('.file-list li[data-path]') ?? [];
+    let needed = DRAWER_MIN_WIDTH;
+    for (const li of items) {
+      const name = li.querySelector<HTMLElement>('.name');
+      const text = name?.firstElementChild as HTMLElement | null;
+      if (!name || !text) continue;
+      // Everything in the row except the clipped name, plus the name's full text width.
+      const chrome = li.getBoundingClientRect().width - name.getBoundingClientRect().width;
+      needed = Math.max(needed, Math.ceil(chrome + text.getBoundingClientRect().width + 4));
+    }
+    const scrollbar = sidebarRef.current
+      ? sidebarRef.current.offsetWidth - (sidebarRef.current.querySelector<HTMLElement>('.sidebar-inner')?.clientWidth ?? 0)
+      : 0;
+    applyDrawerWidth(needed + Math.max(0, scrollbar));
+  }, [applyDrawerWidth]);
+
   // --- keyboard navigation (j/k or arrows, f toggles the file drawer) -------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -238,8 +308,15 @@ export function DiffView() {
         </div>
       </div>
 
-      <div className={`diff-body${drawerOpen ? '' : ' is-drawer-closed'}`}>
-        <aside className="sidebar" id="diff-drawer" aria-hidden={!drawerOpen}>
+      <div className={`diff-body${drawerOpen ? '' : ' is-drawer-closed'}${resizing ? ' is-resizing' : ''}`}>
+        <aside
+          ref={sidebarRef}
+          className="sidebar"
+          id="diff-drawer"
+          aria-hidden={!drawerOpen}
+          style={{ width: drawerOpen ? drawerWidth : 0 }}
+        >
+          <div className="sidebar-inner" style={{ width: drawerWidth }}>
           <details className="commits" open={data.commits.length > 0 && data.commits.length <= 8}>
             <summary>
               Commits <span className="count">({data.commits.length})</span>
@@ -301,6 +378,16 @@ export function DiffView() {
             )}
             {files.length > 0 && visibleFiles.length === 0 && <li className="empty">No files match the filter.</li>}
           </ul>
+          </div>
+          <div
+            className="drawer-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize the file list"
+            title="Drag to resize. Double-click to fit the longest file name."
+            onPointerDown={onHandlePointerDown}
+            onDoubleClick={fitDrawerToNames}
+          />
         </aside>
 
         <div className="content">

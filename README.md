@@ -40,7 +40,8 @@ remembered in the browser.
 - the list of commits the branch has that the base lacks
 - a file list with status (A/M/D/R), filter box, `j`/`k` keyboard navigation,
   in a drawer you can collapse (toolbar button or `f`) to give the diff the
-  whole width; `j`/`k` keep working while it is closed
+  whole width, and resize by dragging its edge (double-click the edge to fit
+  the longest file name); `j`/`k` keep working while it is closed
 - side-by-side or unified rendering with syntax highlighting (diff2html)
 - "All files" mode, and a `.patch` download of the whole diff
 

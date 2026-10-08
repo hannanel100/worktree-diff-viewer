@@ -290,23 +290,39 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .diff-meta code { background: var(--bg-muted); padding: 1px 5px; border-radius: 4px; }
 
 .diff-body { flex: 1; display: grid; grid-template-columns: auto 1fr; min-height: 0; }
-/* The sidebar is a push drawer: closing it hands its width to the diff pane. */
+/* The sidebar is a resizable push drawer: the outer shell animates its width
+   (set inline from state), the inner panel keeps a fixed width and scrolls
+   vertically only, so collapsing never reflows the list and nothing scrolls
+   sideways. */
 .sidebar {
-  width: 340px;
+  position: relative;
   border-right: 1px solid var(--border);
-  overflow: auto;
+  overflow: hidden;
   background: var(--bg-muted);
-  display: flex;
-  flex-direction: column;
   transition: width 0.18s ease;
 }
-.is-drawer-closed .sidebar {
-  width: 0;
-  border-right: none;
-  overflow: hidden;
-  visibility: hidden;
+.sidebar-inner {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
-.sidebar > * { min-width: 340px; }
+.is-drawer-closed .sidebar { border-right: none; visibility: hidden; }
+.is-resizing .sidebar { transition: none; }
+.is-resizing { cursor: col-resize; user-select: none; }
+.drawer-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 3;
+}
+.drawer-handle:hover, .is-resizing .drawer-handle { background: var(--accent); opacity: 0.6; }
+.is-drawer-closed .drawer-handle { display: none; }
 .drawer-toggle { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .drawer-toggle .chevron { font-size: 9px; color: var(--fg-muted); }
 .toolbar-file {
@@ -368,9 +384,10 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 
 .content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .toolbar {
-  display: flex; align-items: center; gap: 14px; padding: 8px 16px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 16px;
   border-bottom: 1px solid var(--border); background: var(--bg);
 }
+.seg button { white-space: nowrap; }
 .toolbar .spacer { flex: 1; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .seg button {
@@ -400,9 +417,10 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 
 @media (max-width: 900px) {
   .diff-body { grid-template-columns: 1fr; }
-  .sidebar { width: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); transition: max-height 0.18s ease; }
-  .sidebar > * { min-width: 0; }
-  .is-drawer-closed .sidebar { width: auto; max-height: 0; border-bottom: none; }
+  .sidebar { width: auto !important; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); transition: max-height 0.18s ease; }
+  .sidebar-inner { width: auto !important; }
+  .drawer-handle { display: none; }
+  .is-drawer-closed .sidebar { max-height: 0; border-bottom: none; }
   .repo-root { display: none; }
   .base-picker input { width: 160px; }
 }
