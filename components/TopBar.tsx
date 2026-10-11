@@ -7,6 +7,24 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { buildUrl, hrefOverview } from '@/lib/client/api';
 import { useRepo } from './RepoProvider';
 
+/** A branch glyph: trunk with two nodes and a branch forking off to the side. */
+function BrandMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 16 16" width="20" height="20" aria-hidden="true" focusable="false">
+      <path
+        d="M4 5v6M4 11c0-2.2 8-1.3 8-3"
+        fill="none"
+        stroke="var(--fg-muted)"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <circle cx="4" cy="3" r="2.2" fill="#60a5fa" />
+      <circle cx="12" cy="6" r="2.2" fill="#34d399" />
+      <circle cx="4" cy="13" r="2.2" fill="var(--fg-muted)" />
+    </svg>
+  );
+}
+
 export function TopBar() {
   const { repo, branches, refresh } = useRepo();
   const router = useRouter();
@@ -41,7 +59,7 @@ export function TopBar() {
   return (
     <header className="topbar">
       <Link className="brand" href={hrefOverview(base)} title="Overview of all worktrees">
-        <span className="brand-mark" />
+        <BrandMark />
         <span className="brand-name">Worktree Diff</span>
       </Link>
       <span className="repo-root" title={repo ? `Repository root: ${repo.repoRoot}` : ''}>

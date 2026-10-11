@@ -79,10 +79,7 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 }
 .brand { display: flex; align-items: center; gap: 8px; color: var(--fg); font-weight: 600; white-space: nowrap; }
 .brand:hover { text-decoration: none; }
-.brand-mark {
-  width: 14px; height: 14px; border-radius: 4px;
-  background: linear-gradient(135deg, #60a5fa, #34d399);
-}
+.brand-mark { width: 20px; height: 20px; flex: none; display: block; }
 .repo-root {
   color: var(--fg-muted);
   font-family: var(--mono);
