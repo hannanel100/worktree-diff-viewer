@@ -28,7 +28,7 @@ afterAll(() => {
 describe('API handlers', () => {
   test('route names are a closed set', () => {
     expect(Object.keys(apiHandlers).sort()).toEqual([
-      'branches', 'diff', 'file', 'patch', 'repo', 'summary',
+      'branches', 'commit', 'commit-file', 'commit-patch', 'diff', 'file', 'patch', 'repo', 'summary',
       'uncommitted', 'uncommitted-file', 'uncommitted-files', 'uncommitted-patch',
     ]);
     expect(isApiName('repo')).toBe(true);
@@ -77,6 +77,25 @@ describe('API handlers', () => {
     expect(res.headers.get('content-type')).toMatch(/text\/x-patch/);
     expect(res.headers.get('content-disposition')).toBe('attachment; filename="feature-vs-main.patch"');
     expect(await res.text()).toMatch(/diff --git a\/lib\/a\.js/);
+  });
+
+  test('commit, commit-file and commit-patch serve one commit', async () => {
+    const c = await (await apiHandlers.commit(req('commit', { worktree: fx.featureDir, commit: fx.shas.f1 }))).json();
+    expect(c.commit).toMatchObject({ sha: fx.shas.f1, subject: 'f1: modify, add, rename' });
+    expect(c.parents).toEqual([fx.shas.c1]);
+    expect(c.files.map((f: { path: string }) => f.path).sort()).toEqual(['lib/a.js', 'lib/b.js', 'new-name.txt']);
+
+    const f = await (await apiHandlers['commit-file'](req('commit-file', { worktree: fx.featureDir, commit: fx.shas.f1, path: 'lib/a.js' }))).json();
+    expect(f.diff).toMatch(/\+export const d = 4;/);
+
+    const p = await apiHandlers['commit-patch'](req('commit-patch', { worktree: fx.featureDir, commit: fx.shas.f1 }));
+    expect(p.status).toBe(200);
+    expect(p.headers.get('content-type')).toMatch(/text\/x-patch/);
+    expect(p.headers.get('content-disposition')).toBe(`attachment; filename="feature-${c.commit.shortSha}.patch"`);
+    expect(await p.text()).not.toMatch(/gone\.txt/);
+
+    expect((await apiHandlers.commit(req('commit', { worktree: fx.featureDir, commit: 'nope' }))).status).toBe(404);
+    expect((await apiHandlers.commit(req('commit', { worktree: fx.featureDir }))).status).toBe(400);
   });
 
   test('errors map to HTTP statuses', async () => {

@@ -306,6 +306,9 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .diff-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--fg-muted); font-size: 13px; }
 .diff-meta b { color: var(--fg); font-weight: 600; }
 .diff-meta code { background: var(--bg-muted); padding: 1px 5px; border-radius: 4px; }
+.diff-meta .meta-commit { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.diff-meta .meta-commit .subject { min-width: 0; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-meta .meta-sep { width: 1px; height: 16px; background: var(--border); }
 
 .diff-body { flex: 1; display: grid; grid-template-columns: auto 1fr; min-height: 0; }
 /* The sidebar is a resizable push drawer: the outer shell animates its width
@@ -366,6 +369,13 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .commits li .sha { font-family: var(--mono); color: var(--accent); }
 .commits li .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .commits li .who { grid-column: 2; color: var(--fg-muted); font-size: 11.5px; }
+/* As a picker the entries behave like the file list: hover, and an accent bar on the active one. */
+.commits.is-selectable li { cursor: pointer; padding-left: 11px; border-left: 3px solid transparent; }
+.commits.is-selectable li:hover { background: var(--bg-hover); }
+.commits.is-selectable li.is-active { background: var(--bg); border-left-color: var(--accent); }
+.commits.is-selectable li.is-active .subject { font-weight: 600; }
+.commits li.whole-branch { border-bottom: 1px solid var(--border); margin-bottom: 4px; padding-bottom: 6px; }
+.commits li.whole-branch .sha { color: var(--fg-muted); }
 
 .file-filter { padding: 8px 10px 4px; }
 .file-filter input {

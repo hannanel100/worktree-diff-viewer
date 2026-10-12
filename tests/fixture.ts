@@ -37,7 +37,7 @@ export interface Fixture {
   squashedDir: string;
   conflictDir: string;
   orphanDir: string;
-  shas: { c1: string; c2: string; f1: string; f2: string };
+  shas: { c1: string; c2: string; c3: string; f1: string; f2: string };
   cleanup(): void;
 }
 
@@ -107,6 +107,7 @@ export function createFixture(): Fixture {
   git(mergedDir, 'add', '-A');
   git(mergedDir, 'commit', '-q', '-m', 'm1: merged feature');
   git(mainDir, 'merge', '-q', '--no-ff', '-m', 'c3: merge merged-feature', 'merged-feature');
+  const c3 = git(mainDir, 'rev-parse', 'HEAD');
 
   // squash-merged: main got the same change as one fresh commit
   const squashedDir = path.join(root, 'wt-squashed');
@@ -142,7 +143,7 @@ export function createFixture(): Fixture {
     squashedDir,
     conflictDir,
     orphanDir,
-    shas: { c1, c2, f1, f2 },
+    shas: { c1, c2, c3, f1, f2 },
     cleanup() {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },

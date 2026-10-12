@@ -63,6 +63,11 @@ export interface Commit {
   subject: string;
 }
 
+export interface CommitInfo extends Commit {
+  /** Parent shas, first parent first; empty for a root commit. */
+  parents: string[];
+}
+
 export interface UncommittedCounts {
   changed: number;
   untracked: number;
@@ -350,7 +355,8 @@ export async function aheadBehind(
   base: string,
   head = 'HEAD',
 ): Promise<{ ahead: number | null; behind: number | null }> {
-  const res = await git(['rev-list', '--left-right', '--count', `${base}...${head}`], { cwd, allowFailure: true });
+  // The trailing `--` stops git from also trying the range as a path name.
+  const res = await git(['rev-list', '--left-right', '--count', `${base}...${head}`, '--'], { cwd, allowFailure: true });
   if (!res.ok) return { ahead: null, behind: null };
   const [behind, ahead] = res.stdout.trim().split(/\s+/).map(Number);
   return { ahead, behind };
@@ -451,19 +457,52 @@ export async function fullDiff(cwd: string, from: string, to: string): Promise<s
   return git(['diff', '-M', '--no-color', '--no-ext-diff', from, to], { cwd });
 }
 
+// Commit records: fields separated by ASCII "unit separator", records by
+// "record separator", so subjects can contain anything printable.
+const FIELD = '\x1f';
+const RECORD = '\x1e';
+const COMMIT_FORMAT = ['%H', '%h', '%an', '%ae', '%aI', '%s'].join(FIELD);
+
+function parseCommit(record: string): Commit {
+  const [sha, shortSha, author, email, date, subject] = record.split(FIELD);
+  return { sha, shortSha, author, email, date, subject };
+}
+
 export async function commitsBetween(cwd: string, base: string, head = 'HEAD'): Promise<Commit[]> {
-  const FIELD = '\x1f';
-  const RECORD = '\x1e';
-  const format = ['%H', '%h', '%an', '%ae', '%aI', '%s'].join(FIELD) + RECORD;
-  const out = await git(['log', `--format=${format}`, '--no-decorate', `${base}..${head}`], { cwd });
+  const out = await git(['log', `--format=${COMMIT_FORMAT}${RECORD}`, '--no-decorate', `${base}..${head}`], { cwd });
   return out
     .split(RECORD)
     .map((r) => r.replace(/^\r?\n/, ''))
     .filter((r) => r.trim() !== '')
-    .map((r) => {
-      const [sha, shortSha, author, email, date, subject] = r.split(FIELD);
-      return { sha, shortSha, author, email, date, subject };
-    });
+    .map(parseCommit);
+}
+
+/**
+ * Metadata and parents of one commit in a single call, or null when the ref
+ * is unknown or does not name a commit. Validated like resolveRef().
+ */
+export async function commitInfo(cwd: string, ref: string): Promise<CommitInfo | null> {
+  if (!isSafeRefSyntax(ref)) return null;
+  const res = await git(
+    ['log', '-1', `--format=${COMMIT_FORMAT}${FIELD}%P`, '--no-decorate', '--end-of-options', ref, '--'],
+    { cwd, allowFailure: true },
+  );
+  if (!res.ok) return null;
+  const record = res.stdout.replace(/\r?\n$/, '');
+  const fields = record.split(FIELD);
+  if (fields.length < 7 || !fields[0]) return null;
+  const parents = fields[6].split(' ').filter((p) => p !== '');
+  return { ...parseCommit(record), parents };
+}
+
+/** git's empty tree in a SHA-1 repository: what a root commit is diffed against. */
+export const EMPTY_TREE_SHA1 = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+/** The empty tree's id in this repository (SHA-256 repositories hash it differently). */
+export async function emptyTree(cwd: string): Promise<string> {
+  const res = await git(['hash-object', '-t', 'tree', '/dev/null'], { cwd, allowFailure: true });
+  const sha = res.ok ? res.stdout.trim() : '';
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : EMPTY_TREE_SHA1;
 }
 
 // ---------------------------------------------------------------------------

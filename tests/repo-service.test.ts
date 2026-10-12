@@ -189,6 +189,101 @@ describe('RepoService', () => {
     expect(p.text).toMatch(/Binary files/);
   });
 
+  test('commit shows one commit against its first parent, with rename detection', async () => {
+    const c = await service.commit({ worktree: fx.featureDir, commit: fx.shas.f1 });
+    expect(c.worktree.branch).toBe('feature');
+    expect(c.commit).toMatchObject({ sha: fx.shas.f1, subject: 'f1: modify, add, rename', author: 'Test Author' });
+    expect(c.commit.shortSha).toBe(fx.shas.f1.slice(0, c.commit.shortSha.length));
+    expect(c.parents).toEqual([fx.shas.c1]);
+    expect(c.parent).toBe(fx.shas.c1);
+
+    const byPath = Object.fromEntries(c.files.map((f) => [f.path, f]));
+    expect(Object.keys(byPath).sort()).toEqual(['lib/a.js', 'lib/b.js', 'new-name.txt']);
+    expect(byPath['lib/a.js']).toMatchObject({ status: 'M', additions: 2, deletions: 1, binary: false });
+    expect(byPath['lib/b.js']).toMatchObject({ status: 'A', additions: 1, deletions: 0 });
+    expect(byPath['new-name.txt']).toMatchObject({ status: 'R', oldPath: 'old-name.txt', similarity: 100 });
+    expect(c.totals).toEqual({ files: 3, additions: 3, deletions: 1 });
+    expect(byPath['gone.txt'], 'f2 is not part of f1').toBeUndefined();
+  });
+
+  test('commit reports binary changes and deletions', async () => {
+    const c = await service.commit({ worktree: fx.featureDir, commit: fx.shas.f2 });
+    expect(c.commit.subject).toBe('f2: binary and delete');
+    expect(c.parents).toEqual([fx.shas.f1]);
+    const byPath = Object.fromEntries(c.files.map((f) => [f.path, f]));
+    expect(Object.keys(byPath).sort()).toEqual(['assets/logo.bin', 'gone.txt']);
+    expect(byPath['assets/logo.bin']).toMatchObject({ status: 'M', binary: true, additions: 0, deletions: 0 });
+    expect(byPath['gone.txt']).toMatchObject({ status: 'D', additions: 0, deletions: 1 });
+    expect(c.totals).toEqual({ files: 2, additions: 0, deletions: 1 });
+  });
+
+  test('a root commit is diffed against the empty tree: every file is added', async () => {
+    const c = await service.commit({ worktree: fx.featureDir, commit: fx.shas.c1 });
+    expect(c.commit.subject).toBe('c1: initial');
+    expect(c.parents).toEqual([]);
+    expect(c.parent).toBeNull();
+    expect(c.files.map((f) => f.path).sort()).toEqual(['README.md', 'assets/logo.bin', 'gone.txt', 'lib/a.js', 'old-name.txt']);
+    expect(c.files.every((f) => f.status === 'A')).toBe(true);
+    expect(c.totals).toEqual({ files: 5, additions: 13, deletions: 0 });
+
+    const readme = await service.commitFile({ worktree: fx.featureDir, commit: fx.shas.c1, path: 'README.md' });
+    expect(readme.parent).toBeNull();
+    expect(readme.diff).toMatch(/new file mode 100644/);
+    expect(readme.diff).toMatch(/\+# Fixture/);
+  });
+
+  test('a merge commit is diffed against its first parent only', async () => {
+    const c = await service.commit({ worktree: fx.mainDir, commit: fx.shas.c3 });
+    expect(c.commit.subject).toBe('c3: merge merged-feature');
+    expect(c.parents).toHaveLength(2);
+    expect(c.parents[0]).toBe(fx.shas.c2);
+    expect(c.parent).toBe(fx.shas.c2);
+    expect(c.files.map((f) => f.path)).toEqual(['merged.txt']);
+    expect(c.files[0]).toMatchObject({ status: 'A', additions: 1 });
+  });
+
+  test('commit file diffs are scoped to the commit and carry rename paths', async () => {
+    const f = await service.commitFile({ worktree: fx.featureDir, commit: fx.shas.f1, path: 'lib/a.js' });
+    expect(f).toMatchObject({ path: 'lib/a.js', oldPath: null, commit: fx.shas.f1, parent: fx.shas.c1 });
+    expect(f.diff).toMatch(/^diff --git a\/lib\/a\.js b\/lib\/a\.js/);
+    expect(f.diff).toMatch(/\+export const d = 4;/);
+    expect(f.diff).toMatch(/-export const a = 1;/);
+
+    const r = await service.commitFile({ worktree: fx.featureDir, commit: fx.shas.f1, path: 'new-name.txt', oldPath: 'old-name.txt' });
+    expect(r.diff).toMatch(/rename from old-name\.txt/);
+    expect(r.diff).toMatch(/rename to new-name\.txt/);
+
+    // A file the commit did not touch has nothing to show.
+    const none = await service.commitFile({ worktree: fx.featureDir, commit: fx.shas.f1, path: 'gone.txt' });
+    expect(none.diff).toBe('');
+  });
+
+  test('commit patch is only that commit, named after the branch and the short sha', async () => {
+    const c = await service.commit({ worktree: fx.featureDir, commit: fx.shas.f1 });
+    const p = await service.commitPatch({ worktree: fx.featureDir, commit: fx.shas.f1 });
+    expect(p.filename).toBe(`feature-${c.commit.shortSha}.patch`);
+    expect(p.text).toMatch(/diff --git a\/lib\/a\.js/);
+    expect(p.text).toMatch(/diff --git a\/lib\/b\.js/);
+    expect(p.text).toMatch(/rename from old-name\.txt/);
+    expect(p.text).not.toMatch(/gone\.txt/);
+    expect(p.text).not.toMatch(/Binary files/);
+  });
+
+  test('bad or missing commits are rejected with a clear status', async () => {
+    expect(await status(service.commit({ worktree: fx.featureDir, commit: 'nope' }))).toBe(404);
+    expect(await status(service.commit({ worktree: fx.featureDir, commit: '--output=x' }))).toBe(404);
+    expect(await status(service.commit({ worktree: fx.featureDir, commit: 'main..feature' }))).toBe(404);
+    expect(await status(service.commit({ worktree: fx.featureDir, commit: 'HEAD~1' }))).toBe(404);
+    // A tree is not a commit.
+    expect(await status(service.commit({ worktree: fx.featureDir, commit: '4b825dc642cb6eb9a060e54bf8d69288fbee4904' }))).toBe(404);
+    expect(await status(service.commit({ worktree: fx.featureDir }))).toBe(400);
+    expect(await status(service.commit({ commit: fx.shas.f1 }))).toBe(400);
+    expect(await status(service.commit({ worktree: fx.root, commit: fx.shas.f1 }))).toBe(404);
+    expect(await status(service.commitFile({ worktree: fx.featureDir, commit: fx.shas.f1 }))).toBe(400);
+    expect(await status(service.commitFile({ worktree: fx.featureDir, commit: 'nope', path: 'lib/a.js' }))).toBe(404);
+    expect(await status(service.commitPatch({ worktree: fx.featureDir, commit: 'nope' }))).toBe(404);
+  });
+
   test('any ref works as a base, including a sha', async () => {
     const s = await service.summary({ worktree: fx.featureDir, base: fx.shas.c1 });
     expect(s.ahead).toBe(2);

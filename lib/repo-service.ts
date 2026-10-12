@@ -2,9 +2,11 @@ import fs from 'node:fs';
 
 import {
   aheadBehind,
+  commitInfo,
   commitsBetween,
   diffFiles,
   discoverRepo,
+  emptyTree,
   fileDiff,
   fullDiff,
   guessDefaultBase,
@@ -21,6 +23,7 @@ import {
   type Branches,
   type ChangedFile,
   type Commit,
+  type CommitInfo,
   type MergeTreeResult,
   type RepoInfo,
   type ResolvedRef,
@@ -79,6 +82,26 @@ export interface FilePayload {
   path: string;
   oldPath: string | null;
   mergeBase: string;
+  diff: string;
+}
+
+/** One commit of a branch, diffed against its first parent. */
+export interface CommitPayload {
+  worktree: WorktreeRow;
+  commit: Commit;
+  /** First parent first; empty for a root commit. */
+  parents: string[];
+  /** What the files are diffed against: the first parent, or null for a root commit (diffed against the empty tree). */
+  parent: string | null;
+  files: ChangedFile[];
+  totals: Totals;
+}
+
+export interface CommitFilePayload {
+  path: string;
+  oldPath: string | null;
+  commit: string;
+  parent: string | null;
   diff: string;
 }
 
@@ -170,6 +193,8 @@ export class RepoService {
   private uncommittedCache = ttlCache<{ files: UncommittedFile[]; totals: Totals }>(UNCOMMITTED_TTL);
   private mergeBases = new Map<string, string>(); // `${head}\0${baseSha}` -> sha (immutable)
   private mergeTrees = new Map<string, MergeTreeResult | null>();
+  private commits = new Map<string, CommitInfo>(); // full sha -> metadata (immutable)
+  private emptyTreeSha: Promise<string> | null = null;
 
   constructor(repo: RepoInfo) {
     this.repo = repo;
@@ -372,5 +397,55 @@ export class RepoService {
     const label = (ctx.wt.branch || ctx.head.slice(0, 10)).replace(/[^\w.-]+/g, '_');
     const baseLabel = String(ctx.base).replace(/[^\w.-]+/g, '_');
     return { filename: `${label}-vs-${baseLabel}.patch`, text };
+  }
+
+  // --- one commit: the commit against its first parent ----------------------
+
+  /** Validate the commit parameter and read its metadata; a full sha is immutable, so it is cached for good. */
+  private async requireCommit(cwd: string, ref: string | undefined): Promise<CommitInfo> {
+    if (!ref) throw new HttpError(400, 'Missing "commit" parameter');
+    const hit = this.commits.get(ref);
+    if (hit) return hit;
+    const info = await commitInfo(cwd, ref);
+    if (!info) throw new HttpError(404, `Commit "${ref}" is not a known commit`);
+    if (info.sha === ref) this.commits.set(ref, info); // names move, shas do not
+    return info;
+  }
+
+  /** The side a commit is diffed against: its first parent, or the empty tree for a root commit. */
+  private commitFrom(cwd: string, info: CommitInfo): Promise<string> {
+    if (info.parents.length > 0) return Promise.resolve(info.parents[0]);
+    this.emptyTreeSha ??= emptyTree(cwd);
+    return this.emptyTreeSha;
+  }
+
+  private async commitContext({ worktree: key, commit: ref }: Params) {
+    const wt = await this.requireWorktree(key);
+    const info = await this.requireCommit(wt.path, ref);
+    const from = await this.commitFrom(wt.path, info);
+    return { wt, cwd: wt.path, info, from };
+  }
+
+  /** Everything the per-commit screen needs except the per-file patches. */
+  async commit(params: Params): Promise<CommitPayload> {
+    const { wt, cwd, info, from } = await this.commitContext(params);
+    const { files, totals } = await diffFiles(cwd, from, info.sha);
+    const { parents, ...commit } = info;
+    return { worktree: wt, commit, parents, parent: parents[0] ?? null, files, totals };
+  }
+
+  async commitFile({ path: filePath, oldPath, context, ...params }: Params): Promise<CommitFilePayload> {
+    if (!filePath) throw new HttpError(400, 'Missing "path" parameter');
+    const { cwd, info, from } = await this.commitContext(params);
+    const lines = Math.min(Math.max(Number(context) || 3, 0), 100000);
+    const diff = await fileDiff(cwd, from, info.sha, { path: filePath, oldPath: oldPath || null }, { context: lines });
+    return { path: filePath, oldPath: oldPath || null, commit: info.sha, parent: info.parents[0] ?? null, diff };
+  }
+
+  async commitPatch(params: Params): Promise<{ filename: string; text: string }> {
+    const { wt, cwd, info, from } = await this.commitContext(params);
+    const text = await fullDiff(cwd, from, info.sha);
+    const label = (wt.branch || wt.head.slice(0, 10)).replace(/[^\w.-]+/g, '_');
+    return { filename: `${label}-${info.shortSha}.patch`, text };
   }
 }

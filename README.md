@@ -50,6 +50,15 @@ The diff is always `merge-base(base, HEAD)..HEAD`, i.e. what the branch
 changed since it diverged. Commits the base gained after the fork do not show
 up as "changes" in the worktree.
 
+**Per-commit view** – click a commit in the *Commits* panel to see only what
+that commit changed (against its first parent; a merge commit is shown against
+the branch it was merged into, a root commit as all-new files). The file list,
+the diff pane, "All files" and the `.patch` download then cover just that
+commit, and the header shows its sha, subject, author and age next to the
+branch facts. The *Whole branch* entry at the top of the panel (or the link in
+the header) returns to the full diff; `]` and `[` step down and up the list.
+The URL carries the selection (`&commit=<sha>`), so it can be shared.
+
 **Uncommitted changes** – the same screen for what sits in a worktree's
 directory but not in any commit: index and working tree against `HEAD`, with
 untracked files shown as new files. Each file is labelled staged, staged +
@@ -166,6 +175,9 @@ API (all `GET`, JSON unless noted):
 | `/api/diff`        | `worktree`, `base`                     | summary + commits + file list                |
 | `/api/file`        | `worktree`, `base`, `path`, `oldPath?` | unified diff of one file                     |
 | `/api/patch`       | `worktree`, `base`                     | whole diff as `text/x-patch` download        |
+| `/api/commit`      | `worktree`, `commit`                   | one commit vs its first parent: metadata, parents, file list |
+| `/api/commit-file` | `worktree`, `commit`, `path`, `oldPath?` | unified diff of one file in that commit    |
+| `/api/commit-patch` | `worktree`, `commit`                  | that commit's diff as a `.patch`             |
 | `/api/uncommitted-files` | `worktree`                       | uncommitted files with area and line counts  |
 | `/api/uncommitted-file`  | `worktree`, `path`, `oldPath?`   | working-tree diff of one file vs `HEAD`      |
 | `/api/uncommitted-patch` | `worktree`                       | all uncommitted changes as a `.patch`        |
@@ -175,17 +187,17 @@ screen; untracked files are read from disk to build a new-file diff, so no
 other file in the worktree is ever readable through the API.
 
 `worktree` is a path exactly as `git worktree list` prints it (or the row id
-from `/api/repo`). Spawning git is the dominant cost (hundreds of ms per
-process on Windows), so the server caches the worktree list and resolved refs
-for a few seconds and merge-bases for the life of the process, and avoids
-`%(refname:short)`, which takes seconds on repositories with thousands of
-refs.
+from `/api/repo`); `commit` is a full sha (any ref git resolves to a commit is
+accepted). Spawning git is the dominant cost (hundreds of ms per process on
+Windows), so the server caches the worktree list and resolved refs for a few
+seconds and merge-bases and commit metadata for the life of the process, and
+avoids `%(refname:short)`, which takes seconds on repositories with thousands
+of refs.
 
 ## Roadmap
 
 Ideas for later versions, roughly in order of usefulness:
 
-- **Per-commit view** – click a commit in the list to see only that commit.
 - **Whitespace and context controls** – ignore whitespace, widen context,
   expand collapsed lines.
 - **Review aids** – mark files as viewed, collapse viewed files, remember

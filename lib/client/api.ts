@@ -45,10 +45,13 @@ export async function pool<T>(items: T[], limit: number, worker: (item: T) => Pr
 
 export const hrefOverview = (base: string | null | undefined) => buildUrl('/', { base });
 
-export const hrefDiff = (worktree: string, base: string | null | undefined, file?: string | null) =>
-  buildUrl('/diff', { worktree, base, file });
+/** The Diff screen; with `commit` it shows only that commit (against its first parent). */
+export const hrefDiff = (worktree: string, base: string | null | undefined, file?: string | null, commit?: string | null) =>
+  buildUrl('/diff', { worktree, base, commit, file });
 
 export const hrefPatch = (worktree: string, base: string) => buildUrl('/api/patch', { worktree, base });
+
+export const hrefCommitPatch = (worktree: string, commit: string) => buildUrl('/api/commit-patch', { worktree, commit });
 
 export const hrefUncommitted = (worktree: string, base: string | null | undefined, file?: string | null) =>
   buildUrl('/uncommitted', { worktree, base, file });

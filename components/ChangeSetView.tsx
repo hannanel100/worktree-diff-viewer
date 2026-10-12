@@ -21,8 +21,19 @@ export interface ChangeSetViewProps {
   /** Facts about the change set, shown in the header. */
   meta: ReactNode;
   commits?: Commit[];
+  /**
+   * Sha of the commit the files belong to, or null for the whole change set.
+   * With `onSelectCommit` the commits panel becomes a picker: each entry shows
+   * only that commit, a "Whole branch" entry on top goes back.
+   */
+  activeCommit?: string | null;
+  onSelectCommit?: (sha: string | null) => void;
   files: ChangeSetFile[];
   emptyMessage: string;
+  /** While the caller is still fetching the file list: shown in place of the files and the diff. */
+  loading?: string | null;
+  /** The caller could not fetch the file list; shown in the diff pane. */
+  error?: string | null;
   /** File preselected from the URL. */
   initialFile: string | null;
   hrefForFile: (path: string) => string;
@@ -30,6 +41,10 @@ export interface ChangeSetViewProps {
   fetchPatch: () => Promise<string>;
   patchHref: string;
 }
+
+const COMMITS_HELP =
+  'Click a commit to see only what it changed (against its first parent).\n' +
+  'Keys: ] moves down the list to the next older commit, [ moves up to the newer one and back to the whole branch.';
 
 const FORMAT_KEY = 'wtdiff.format';
 const DRAWER_KEY = 'wtdiff.drawer';
@@ -67,8 +82,12 @@ export function ChangeSetView({
   subtitle,
   meta,
   commits,
+  activeCommit = null,
+  onSelectCommit,
   files,
   emptyMessage,
+  loading = null,
+  error = null,
   initialFile,
   hrefForFile,
   fetchFile,
@@ -76,6 +95,10 @@ export function ChangeSetView({
   patchHref,
 }: ChangeSetViewProps) {
   const [activePath, setActivePath] = useState<string | null>(initialFile);
+  // The commits panel folds itself for long lists, but stays open while a commit is picked.
+  const [commitsOpen, setCommitsOpen] = useState<boolean>(
+    () => activeCommit !== null || (commits !== undefined && commits.length > 0 && commits.length <= 8),
+  );
   const [format, setFormat] = useState<DiffFormat>(
     () => (localStorage.getItem(FORMAT_KEY) as DiffFormat | null) ?? 'side-by-side',
   );
@@ -179,6 +202,33 @@ export function ChangeSetView({
     [hrefForFile],
   );
 
+  // A picked commit keeps the panel open and is scrolled into view.
+  useEffect(() => {
+    if (activeCommit === null) return;
+    setCommitsOpen(true);
+    sidebarRef.current
+      ?.querySelector(`.commits li[data-sha="${CSS.escape(activeCommit)}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [activeCommit]);
+
+  // [ and ] walk the commits panel: the "Whole branch" entry on top, then newest
+  // to oldest. The cursor is advanced at once so that key repeat does not step
+  // from a stale position while the parent is still re-rendering.
+  const commitCursor = useRef(activeCommit);
+  commitCursor.current = activeCommit;
+  const stepCommit = useCallback(
+    (delta: 1 | -1) => {
+      if (!onSelectCommit || !commits || commits.length === 0) return;
+      const order: (string | null)[] = [null, ...commits.map((c) => c.sha)];
+      const idx = Math.max(0, order.indexOf(commitCursor.current));
+      const next = order[Math.min(order.length - 1, Math.max(0, idx + delta))];
+      if (next === commitCursor.current) return;
+      commitCursor.current = next;
+      onSelectCommit(next);
+    },
+    [commits, onSelectCommit],
+  );
+
   const visibleFiles = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files;
@@ -243,7 +293,7 @@ export function ChangeSetView({
     applyDrawerWidth(needed + Math.max(0, scrollbar));
   }, [applyDrawerWidth]);
 
-  // --- keyboard: j/k or arrows move between files, f toggles the drawer ------
+  // --- keyboard: j/k or arrows move between files, f toggles the drawer, [ ] between commits
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -251,6 +301,12 @@ export function ChangeSetView({
       if (e.key === 'f') {
         e.preventDefault();
         toggleDrawer();
+        return;
+      }
+      if (e.key === '[' || e.key === ']') {
+        if (!onSelectCommit) return;
+        e.preventDefault();
+        stepCommit(e.key === ']' ? 1 : -1);
         return;
       }
       const down = e.key === 'j' || e.key === 'ArrowDown';
@@ -267,7 +323,7 @@ export function ChangeSetView({
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [visibleFiles, activeFile, selectFile, toggleDrawer]);
+  }, [visibleFiles, activeFile, selectFile, toggleDrawer, onSelectCommit, stepCommit]);
 
   const changeFormat = (f: DiffFormat) => {
     setFormat(f);
@@ -298,13 +354,36 @@ export function ChangeSetView({
         >
           <div className="sidebar-inner" style={{ width: drawerWidth }}>
             {commits && (
-              <details className="commits" open={commits.length > 0 && commits.length <= 8}>
+              <details
+                className={`commits${onSelectCommit ? ' is-selectable' : ''}`}
+                open={commitsOpen}
+                onToggle={(e) => setCommitsOpen(e.currentTarget.open)}
+                title={onSelectCommit ? COMMITS_HELP : undefined}
+              >
                 <summary>
                   Commits <span className="count">({commits.length})</span>
                 </summary>
                 <ol>
+                  {onSelectCommit && commits.length > 0 && (
+                    <li
+                      className={`whole-branch${activeCommit === null ? ' is-active' : ''}`}
+                      aria-current={activeCommit === null ? 'true' : undefined}
+                      title="Every commit together: the whole diff of the branch against the base"
+                      onClick={() => onSelectCommit(null)}
+                    >
+                      <span className="sha" aria-hidden="true">all</span>
+                      <span className="subject">Whole branch</span>
+                    </li>
+                  )}
                   {commits.map((c) => (
-                    <li key={c.sha} title={`${c.sha}\n${c.author} <${c.email}>\n${c.date}`}>
+                    <li
+                      key={c.sha}
+                      data-sha={c.sha}
+                      className={c.sha === activeCommit ? 'is-active' : undefined}
+                      aria-current={c.sha === activeCommit ? 'true' : undefined}
+                      title={`${c.sha}\n${c.author} <${c.email}>\n${c.date}`}
+                      onClick={onSelectCommit ? () => onSelectCommit(c.sha) : undefined}
+                    >
                       <span className="sha">{c.shortSha}</span>
                       <span className="subject">{c.subject}</span>
                       <span className="who">{c.author} · {relTime(c.date)}</span>
@@ -355,7 +434,7 @@ export function ChangeSetView({
                   </li>
                 );
               })}
-              {files.length === 0 && <li className="empty">{emptyMessage}</li>}
+              {files.length === 0 && <li className="empty">{loading ?? emptyMessage}</li>}
               {files.length > 0 && visibleFiles.length === 0 && <li className="empty">No files match the filter.</li>}
             </ul>
           </div>
@@ -408,7 +487,7 @@ export function ChangeSetView({
             </a>
           </div>
           <div ref={renderRef} className="render-host">
-            <DiffPane text={text} format={format} loading={loadingLabel} error={paneError} />
+            <DiffPane text={text} format={format} loading={loading ?? loadingLabel} error={error ?? paneError} />
           </div>
         </div>
       </div>
