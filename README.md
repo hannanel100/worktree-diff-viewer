@@ -27,7 +27,8 @@ Serving at http://127.0.0.1:4747/?base=dev
   unmerged branches the files that would **conflict** with the base
 - files changed and lines added/removed since the branch forked from the base
 - a separate *uncommitted* badge: edits sitting in the worktree directory that
-  are not part of any commit. They are never folded into the diff.
+  are not part of any commit. They are never folded into the diff; the badge
+  opens them on their own screen.
 
 The table can be **sorted** by any column (click a header, shift-click for a
 second sort key), **filtered** by branch or path text, by merge status and by
@@ -48,6 +49,12 @@ remembered in the browser.
 The diff is always `merge-base(base, HEAD)..HEAD`, i.e. what the branch
 changed since it diverged. Commits the base gained after the fork do not show
 up as "changes" in the worktree.
+
+**Uncommitted changes** – the same screen for what sits in a worktree's
+directory but not in any commit: index and working tree against `HEAD`, with
+untracked files shown as new files. Each file is labelled staged, staged +
+unstaged, untracked or conflict. Reachable from the Overview badge and from
+the Diff header; a Refresh button re-reads the working tree.
 
 ## Install
 
@@ -142,7 +149,8 @@ lib/repo-service.ts   RepoService: summary / diff / file / patch / merge status,
 lib/context.ts        one RepoService per process, bound to WTDIFF_CWD
 lib/client/           browser helpers: fetch, URL builders, formatting, localStorage
 app/                  Next.js app: layout, pages, dev-only API routes, styles
-components/           Overview, OverviewTable (TanStack), DiffView, DiffPane, TopBar, ...
+components/           Overview, OverviewTable (TanStack), ChangeSetView (file drawer + diff pane) used by
+                      DiffView (committed) and UncommittedView, DiffPane (diff2html), TopBar, ...
 scripts/build-server.mjs   esbuild bundle of the server
 tests/                fixture builder + parser, service, handler and server tests
 ```
@@ -158,6 +166,13 @@ API (all `GET`, JSON unless noted):
 | `/api/diff`        | `worktree`, `base`                     | summary + commits + file list                |
 | `/api/file`        | `worktree`, `base`, `path`, `oldPath?` | unified diff of one file                     |
 | `/api/patch`       | `worktree`, `base`                     | whole diff as `text/x-patch` download        |
+| `/api/uncommitted-files` | `worktree`                       | uncommitted files with area and line counts  |
+| `/api/uncommitted-file`  | `worktree`, `path`, `oldPath?`   | working-tree diff of one file vs `HEAD`      |
+| `/api/uncommitted-patch` | `worktree`                       | all uncommitted changes as a `.patch`        |
+
+Only paths that `git status` itself reports can be diffed on the uncommitted
+screen; untracked files are read from disk to build a new-file diff, so no
+other file in the worktree is ever readable through the API.
 
 `worktree` is a path exactly as `git worktree list` prints it (or the row id
 from `/api/repo`). Spawning git is the dominant cost (hundreds of ms per
@@ -170,8 +185,6 @@ refs.
 
 Ideas for later versions, roughly in order of usefulness:
 
-- **Uncommitted changes view** – show the content of a worktree's uncommitted
-  edits on their own tab (still separate from the committed diff).
 - **Per-commit view** – click a commit in the list to see only that commit.
 - **Whitespace and context controls** – ignore whitespace, widen context,
   expand collapsed lines.

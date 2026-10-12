@@ -27,7 +27,10 @@ afterAll(() => {
 
 describe('API handlers', () => {
   test('route names are a closed set', () => {
-    expect(Object.keys(apiHandlers).sort()).toEqual(['branches', 'diff', 'file', 'patch', 'repo', 'summary', 'uncommitted']);
+    expect(Object.keys(apiHandlers).sort()).toEqual([
+      'branches', 'diff', 'file', 'patch', 'repo', 'summary',
+      'uncommitted', 'uncommitted-file', 'uncommitted-files', 'uncommitted-patch',
+    ]);
     expect(isApiName('repo')).toBe(true);
     expect(isApiName('constructor')).toBe(false);
     expect(isApiName('__proto__')).toBe(false);
@@ -50,7 +53,15 @@ describe('API handlers', () => {
     expect(s).toMatchObject({ ahead: 2, behind: 4, merge: { state: 'unmerged', conflicts: [] } });
 
     const u = await (await apiHandlers.uncommitted(req('uncommitted', { worktree: fx.featureDir }))).json();
-    expect(u).toMatchObject({ changed: 1, untracked: 1 });
+    expect(u).toMatchObject({ changed: 2, untracked: 1 });
+
+    const uf = await (await apiHandlers['uncommitted-files'](req('uncommitted-files', { worktree: fx.featureDir }))).json();
+    expect(uf.files.map((f: { path: string }) => f.path).sort()).toEqual(['lib/b.js', 'scratch.txt', 'staged.txt']);
+    const one = await (await apiHandlers['uncommitted-file'](req('uncommitted-file', { worktree: fx.featureDir, path: 'scratch.txt' }))).json();
+    expect(one.diff).toMatch(/\+untracked/);
+    const up = await apiHandlers['uncommitted-patch'](req('uncommitted-patch', { worktree: fx.featureDir }));
+    expect(up.headers.get('content-disposition')).toBe('attachment; filename="feature-uncommitted.patch"');
+    expect(await up.text()).toMatch(/uncommitted edit/);
 
     const d = await (await apiHandlers.diff(req('diff', { worktree: fx.featureDir, base: 'main' }))).json();
     expect(d.files).toHaveLength(5);

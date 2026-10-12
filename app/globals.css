@@ -279,6 +279,27 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
   background: var(--bg);
 }
 .diff-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.diff-nav { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.diff-nav a + a::before { content: '·'; margin-right: 10px; color: var(--fg-muted); }
+.tag-link { text-decoration: none; }
+.tag-link:hover { text-decoration: none; }
+.tag-link:hover .tag { filter: brightness(1.12); text-decoration: underline; }
+.diff-meta .btn { padding: 3px 9px; font-size: 12.5px; }
+.area {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--fg-muted);
+  vertical-align: middle;
+}
+.area-untracked { color: var(--add); border-color: var(--add); }
+.area-staged, .area-both { color: var(--accent); border-color: var(--accent); }
+.area-conflict { color: var(--del); border-color: var(--del); }
 .diff-title h1 { font-family: var(--mono); font-size: 16px; }
 .diff-title .path { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .back { color: var(--fg-muted); font-weight: 500; }

@@ -7,6 +7,7 @@
 // with a single git process.
 
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const MAX_BUFFER = 256 * 1024 * 1024; // diffs of large branches can be big
@@ -65,6 +66,22 @@ export interface Commit {
 export interface UncommittedCounts {
   changed: number;
   untracked: number;
+}
+
+/** Where an uncommitted change sits: the index, the working tree, both, or neither (untracked). */
+export type UncommittedArea = 'staged' | 'unstaged' | 'both' | 'untracked' | 'conflict';
+
+export interface UncommittedFile extends ChangedFile {
+  area: UncommittedArea;
+}
+
+export interface StatusEntry {
+  kind: 'changed' | 'renamed' | 'unmerged' | 'untracked';
+  /** Index (X) and working-tree (Y) status letters from `git status --porcelain=v2`; '.' = unchanged. */
+  x: string;
+  y: string;
+  path: string;
+  oldPath: string | null;
 }
 
 export interface ResolvedRef {
@@ -453,19 +470,39 @@ export async function commitsBetween(cwd: string, base: string, head = 'HEAD'): 
 // Uncommitted changes (summary only - never folded into the diff)
 // ---------------------------------------------------------------------------
 
-export function parseStatusV2(raw: string): UncommittedCounts {
+/** Parse `git status --porcelain=v2 -z` into one entry per changed path. */
+export function parseStatusV2Entries(raw: string): StatusEntry[] {
   const tokens = raw.split('\0');
-  let changed = 0;
-  let untracked = 0;
+  const out: StatusEntry[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const entry = tokens[i];
     if (!entry) continue;
     const kind = entry[0];
-    if (kind === '1' || kind === 'u') changed++;
-    else if (kind === '2') {
-      changed++;
-      i++; // rename entries carry the original path as the next token
-    } else if (kind === '?') untracked++;
+    const parts = entry.split(' ');
+    if (kind === '1') {
+      // 1 XY sub mH mI mW hH hI path
+      out.push({ kind: 'changed', x: parts[1][0], y: parts[1][1], path: parts.slice(8).join(' '), oldPath: null });
+    } else if (kind === '2') {
+      // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
+      const oldPath = tokens[++i] ?? null;
+      out.push({ kind: 'renamed', x: parts[1][0], y: parts[1][1], path: parts.slice(9).join(' '), oldPath });
+    } else if (kind === 'u') {
+      // u XY sub m1 m2 m3 mW h1 h2 h3 path
+      out.push({ kind: 'unmerged', x: parts[1][0], y: parts[1][1], path: parts.slice(10).join(' '), oldPath: null });
+    } else if (kind === '?') {
+      out.push({ kind: 'untracked', x: '?', y: '?', path: entry.slice(2), oldPath: null });
+    }
+    // '!' (ignored) entries never appear: --ignored is not passed.
+  }
+  return out;
+}
+
+export function parseStatusV2(raw: string): UncommittedCounts {
+  let changed = 0;
+  let untracked = 0;
+  for (const e of parseStatusV2Entries(raw)) {
+    if (e.kind === 'untracked') untracked++;
+    else changed++;
   }
   return { changed, untracked };
 }
@@ -478,4 +515,96 @@ export async function uncommittedSummary(cwd: string): Promise<UncommittedCounts
     { cwd },
   );
   return parseStatusV2(out);
+}
+
+/** Map a status entry to the badge letter and the area it lives in. */
+export function describeUncommitted(e: StatusEntry): { status: FileStatus; area: UncommittedArea } {
+  if (e.kind === 'untracked') return { status: 'A', area: 'untracked' };
+  if (e.kind === 'unmerged') return { status: 'U', area: 'conflict' };
+  const area: UncommittedArea = e.x !== '.' && e.y !== '.' ? 'both' : e.x !== '.' ? 'staged' : 'unstaged';
+  const letters = e.x + e.y;
+  const status: FileStatus =
+    e.kind === 'renamed' ? 'R' : letters.includes('A') ? 'A' : letters.includes('D') ? 'D' : letters.includes('T') ? 'T' : 'M';
+  return { status, area };
+}
+
+const BINARY_PROBE_BYTES = 8000;
+
+function readNewFile(cwd: string, relPath: string): { mode: string; buf: Buffer } | null {
+  const full = path.join(cwd, relPath);
+  try {
+    const stat = fs.lstatSync(full);
+    if (stat.isSymbolicLink()) return { mode: '120000', buf: Buffer.from(fs.readlinkSync(full), 'utf8') };
+    if (!stat.isFile()) return null;
+    return { mode: '100644', buf: fs.readFileSync(full) };
+  } catch {
+    return null;
+  }
+}
+
+function splitLines(text: string): { lines: string[]; trailingNewline: boolean } {
+  if (text === '') return { lines: [], trailingNewline: true };
+  const trailingNewline = text.endsWith('\n');
+  const lines = text.split('\n');
+  if (trailingNewline) lines.pop();
+  return { lines, trailingNewline };
+}
+
+/** Line counts for an untracked file, read straight from disk (HEAD has nothing to diff against). */
+export function countNewFile(cwd: string, relPath: string): { additions: number; deletions: number; binary: boolean } {
+  const file = readNewFile(cwd, relPath);
+  if (!file) return { additions: 0, deletions: 0, binary: false };
+  if (file.buf.subarray(0, BINARY_PROBE_BYTES).includes(0)) return { additions: 0, deletions: 0, binary: true };
+  return { additions: splitLines(file.buf.toString('utf8')).lines.length, deletions: 0, binary: false };
+}
+
+/** Unified diff of an untracked file, in the shape `git diff` would print for a new file. */
+export function untrackedFileDiff(cwd: string, relPath: string): string {
+  const file = readNewFile(cwd, relPath);
+  const head = `diff --git a/${relPath} b/${relPath}\nnew file mode ${file?.mode ?? '100644'}\n`;
+  if (!file) return head;
+  if (file.buf.subarray(0, BINARY_PROBE_BYTES).includes(0)) {
+    return `${head}Binary files /dev/null and b/${relPath} differ\n`;
+  }
+  const { lines, trailingNewline } = splitLines(file.buf.toString('utf8'));
+  if (lines.length === 0) return head;
+  let body = lines.map((l) => `+${l}`).join('\n') + '\n';
+  if (!trailingNewline) body += '\\ No newline at end of file\n';
+  return `${head}--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`;
+}
+
+/** Every uncommitted change of a worktree (index + working tree vs HEAD, plus untracked files). */
+export async function uncommittedFiles(cwd: string): Promise<{ files: UncommittedFile[]; totals: Totals }> {
+  const [statusRaw, numstat] = await Promise.all([
+    git(['--no-optional-locks', 'status', '--porcelain=v2', '-z', '--untracked-files=all'], { cwd }),
+    // HEAD may not exist yet in a brand-new repository; then there are no line counts.
+    git(['diff', '--numstat', '-z', '-M', 'HEAD'], { cwd, allowFailure: true }),
+  ]);
+  const stats = numstat.ok ? parseNumstat(numstat.stdout) : new Map<string, NumstatEntry>();
+  const files: UncommittedFile[] = parseStatusV2Entries(statusRaw).map((e) => {
+    const { status, area } = describeUncommitted(e);
+    const counts =
+      area === 'untracked' ? countNewFile(cwd, e.path) : (stats.get(e.path) ?? { additions: 0, deletions: 0, binary: false });
+    return { status, similarity: null, path: e.path, oldPath: e.oldPath, area, ...counts };
+  });
+  return { files, totals: sumTotals(files) };
+}
+
+export async function workingTreeFileDiff(
+  cwd: string,
+  file: { path: string; oldPath: string | null; area: UncommittedArea },
+  { context = 3 }: { context?: number } = {},
+): Promise<string> {
+  if (file.area === 'untracked') return untrackedFileDiff(cwd, file.path);
+  const pathspec = [`:(literal)${file.path}`];
+  if (file.oldPath) pathspec.push(`:(literal)${file.oldPath}`);
+  return git(
+    ['diff', '-M', `--unified=${context}`, '--no-color', '--no-ext-diff', 'HEAD', '--', ...pathspec],
+    { cwd },
+  );
+}
+
+export async function workingTreePatch(cwd: string, untrackedPaths: string[]): Promise<string> {
+  const tracked = await git(['diff', '-M', '--no-color', '--no-ext-diff', 'HEAD'], { cwd, allowFailure: true });
+  return (tracked.ok ? tracked.stdout : '') + untrackedPaths.map((p) => untrackedFileDiff(cwd, p)).join('');
 }

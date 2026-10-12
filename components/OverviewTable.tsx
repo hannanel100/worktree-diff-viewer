@@ -15,7 +15,7 @@ import {
 } from '@tanstack/react-table';
 
 import type { MergeStatus, SummaryPayload, UncommittedPayload, WorktreeRow } from '@/lib/repo-service';
-import { hrefDiff } from '@/lib/client/api';
+import { hrefDiff, hrefUncommitted } from '@/lib/client/api';
 import { displayPath, fmtNum, worktreeLabel } from '@/lib/client/format';
 import { loadJson, saveJson } from '@/lib/client/storage';
 import { MergeTags, Skeleton, UncommittedTag, WorktreeTags } from './Tags';
@@ -190,7 +190,19 @@ export function OverviewTable({ rows, base, repoRoot }: { rows: OverviewRow[]; b
           const r = row.original;
           if (r.uncommittedError) return <span className="muted" title={r.uncommittedError}>–</span>;
           if (!r.uncommitted) return <Skeleton />;
-          return <UncommittedTag u={r.uncommitted} />;
+          if (r.uncommitted.changed + r.uncommitted.untracked === 0 || isDisabled(r.wt, base)) {
+            return <UncommittedTag u={r.uncommitted} />;
+          }
+          return (
+            <Link
+              className="tag-link"
+              href={hrefUncommitted(r.wt.path, base)}
+              onClick={(e) => e.stopPropagation()}
+              title="Open the uncommitted changes of this worktree"
+            >
+              <UncommittedTag u={r.uncommitted} />
+            </Link>
+          );
         },
       },
       {

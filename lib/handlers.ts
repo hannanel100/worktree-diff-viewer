@@ -9,21 +9,26 @@ import { getRepoService } from './context';
 
 export type ApiHandler = (req: Request) => Promise<Response>;
 
-async function patch(req: Request): Promise<Response> {
-  try {
-    const params = Object.fromEntries(new URL(req.url).searchParams) as Params;
-    const service = await getRepoService();
-    const { filename, text } = await service.patch(params);
-    return new Response(text, {
-      headers: {
-        'Content-Type': 'text/x-patch; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'no-store',
-      },
-    });
-  } catch (err) {
-    return errorResponse(err);
-  }
+/** A `.patch` download: plain text with a filename, errors as JSON. */
+function patchRoute(
+  produce: (params: Params, service: Awaited<ReturnType<typeof getRepoService>>) => Promise<{ filename: string; text: string }>,
+): ApiHandler {
+  return async (req) => {
+    try {
+      const params = Object.fromEntries(new URL(req.url).searchParams) as Params;
+      const service = await getRepoService();
+      const { filename, text } = await produce(params, service);
+      return new Response(text, {
+        headers: {
+          'Content-Type': 'text/x-patch; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  };
 }
 
 export const apiHandlers = {
@@ -33,7 +38,10 @@ export const apiHandlers = {
   uncommitted: jsonRoute((params, service) => service.uncommitted(params)),
   diff: jsonRoute((params, service) => service.diff(params)),
   file: jsonRoute((params, service) => service.file(params)),
-  patch,
+  patch: patchRoute((params, service) => service.patch(params)),
+  'uncommitted-files': jsonRoute((params, service) => service.uncommittedFiles(params)),
+  'uncommitted-file': jsonRoute((params, service) => service.uncommittedFile(params)),
+  'uncommitted-patch': patchRoute((params, service) => service.uncommittedPatch(params)),
 } satisfies Record<string, ApiHandler>;
 
 export type ApiName = keyof typeof apiHandlers;

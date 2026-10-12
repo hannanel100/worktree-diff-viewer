@@ -49,3 +49,8 @@ export const hrefDiff = (worktree: string, base: string | null | undefined, file
   buildUrl('/diff', { worktree, base, file });
 
 export const hrefPatch = (worktree: string, base: string) => buildUrl('/api/patch', { worktree, base });
+
+export const hrefUncommitted = (worktree: string, base: string | null | undefined, file?: string | null) =>
+  buildUrl('/uncommitted', { worktree, base, file });
+
+export const hrefUncommittedPatch = (worktree: string) => buildUrl('/api/uncommitted-patch', { worktree });

@@ -14,7 +14,10 @@ import {
   mergeTree,
   resolveRef,
   samePath,
+  uncommittedFiles,
   uncommittedSummary,
+  workingTreeFileDiff,
+  workingTreePatch,
   type Branches,
   type ChangedFile,
   type Commit,
@@ -22,7 +25,9 @@ import {
   type RepoInfo,
   type ResolvedRef,
   type Totals,
+  type UncommittedArea,
   type UncommittedCounts,
+  type UncommittedFile,
   type Worktree,
 } from './git';
 
@@ -79,6 +84,21 @@ export interface FilePayload {
 
 export type UncommittedPayload = UncommittedCounts & { worktree: string };
 
+export interface UncommittedFilesPayload {
+  worktree: WorktreeRow;
+  head: string;
+  files: UncommittedFile[];
+  totals: Totals;
+  counts: UncommittedCounts;
+}
+
+export interface UncommittedFilePayload {
+  path: string;
+  oldPath: string | null;
+  area: UncommittedArea;
+  diff: string;
+}
+
 type Params = Record<string, string | undefined>;
 
 /**
@@ -109,6 +129,9 @@ function ttlCache<T>(ttl: number) {
 const WORKTREE_TTL = 3_000;
 const REF_TTL = 3_000;
 const BRANCH_TTL = 60_000;
+// Long enough to make per-file requests and prefetching cheap, short enough
+// that an edit in the worktree shows up on the next click.
+const UNCOMMITTED_TTL = 1_500;
 
 export const UNKNOWN_MERGE: MergeStatus = { state: 'unknown', via: null, conflicts: null };
 
@@ -144,6 +167,7 @@ export class RepoService {
   private worktreeCache = ttlCache<WorktreeRow[]>(WORKTREE_TTL);
   private refCache = ttlCache<ResolvedRef | null>(REF_TTL);
   private branchCache = ttlCache<Branches>(BRANCH_TTL);
+  private uncommittedCache = ttlCache<{ files: UncommittedFile[]; totals: Totals }>(UNCOMMITTED_TTL);
   private mergeBases = new Map<string, string>(); // `${head}\0${baseSha}` -> sha (immutable)
   private mergeTrees = new Map<string, MergeTreeResult | null>();
 
@@ -270,6 +294,50 @@ export class RepoService {
     const wt = await this.requireWorktree(key);
     const counts = await uncommittedSummary(wt.path);
     return { worktree: wt.path, ...counts };
+  }
+
+  // --- uncommitted changes: the working tree + index against HEAD ----------
+
+  private uncommittedListCached(wt: WorktreeRow) {
+    return this.uncommittedCache.get(wt.path, () => uncommittedFiles(wt.path));
+  }
+
+  /** Every uncommitted change of one worktree, with line counts. */
+  async uncommittedFiles({ worktree: key }: Params): Promise<UncommittedFilesPayload> {
+    const wt = await this.requireWorktree(key);
+    const { files, totals } = await this.uncommittedListCached(wt);
+    const counts = {
+      changed: files.filter((f) => f.area !== 'untracked').length,
+      untracked: files.filter((f) => f.area === 'untracked').length,
+    };
+    return { worktree: wt, head: wt.head, files, totals, counts };
+  }
+
+  /** Only paths git itself reports as changed can be diffed; nothing else on disk is readable. */
+  private async requireUncommittedFile(wt: WorktreeRow, filePath: string | undefined, oldPath: string | undefined) {
+    if (!filePath) throw new HttpError(400, 'Missing "path" parameter');
+    const { files } = await this.uncommittedListCached(wt);
+    const file =
+      files.find((f) => f.path === filePath && (f.oldPath ?? null) === (oldPath || null)) ??
+      files.find((f) => f.path === filePath);
+    if (!file) throw new HttpError(404, `"${filePath}" has no uncommitted changes in this worktree`);
+    return file;
+  }
+
+  async uncommittedFile({ worktree: key, path: filePath, oldPath, context }: Params): Promise<UncommittedFilePayload> {
+    const wt = await this.requireWorktree(key);
+    const file = await this.requireUncommittedFile(wt, filePath, oldPath);
+    const lines = Math.min(Math.max(Number(context) || 3, 0), 100000);
+    const diff = await workingTreeFileDiff(wt.path, file, { context: lines });
+    return { path: file.path, oldPath: file.oldPath, area: file.area, diff };
+  }
+
+  async uncommittedPatch({ worktree: key }: Params): Promise<{ filename: string; text: string }> {
+    const wt = await this.requireWorktree(key);
+    const { files } = await this.uncommittedListCached(wt);
+    const text = await workingTreePatch(wt.path, files.filter((f) => f.area === 'untracked').map((f) => f.path));
+    const label = (wt.branch || wt.head.slice(0, 10)).replace(/[^\w.-]+/g, '_');
+    return { filename: `${label}-uncommitted.patch`, text };
   }
 
   /** Everything the Diff screen needs except the per-file patches. */

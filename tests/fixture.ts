@@ -93,8 +93,11 @@ export function createFixture(): Fixture {
   git(featureDir, 'commit', '-q', '-m', 'f2: binary and delete');
   const f2 = git(featureDir, 'rev-parse', 'HEAD');
 
-  // uncommitted noise in the feature worktree
+  // uncommitted noise in the feature worktree: an unstaged edit, a staged new
+  // file and an untracked file
   write(featureDir, 'lib/b.js', 'export const hello = () => "world";\n// uncommitted edit\n');
+  write(featureDir, 'staged.txt', 'staged content\n');
+  git(featureDir, 'add', 'staged.txt');
   write(featureDir, 'scratch.txt', 'untracked\n');
 
   // merged by ancestry: main merged this branch with a merge commit

@@ -54,9 +54,57 @@ describe('RepoService', () => {
   });
 
   test('uncommitted edits and untracked files are reported separately', async () => {
-    expect(await service.uncommitted({ worktree: fx.featureDir })).toMatchObject({ changed: 1, untracked: 1 });
+    expect(await service.uncommitted({ worktree: fx.featureDir })).toMatchObject({ changed: 2, untracked: 1 });
     expect(await service.uncommitted({ worktree: fx.mainDir })).toMatchObject({ changed: 0, untracked: 0 });
     expect(await status(service.uncommitted({}))).toBe(400);
+  });
+
+  test('uncommitted files list staged, unstaged and untracked changes with counts', async () => {
+    const u = await service.uncommittedFiles({ worktree: fx.featureDir });
+    expect(u.worktree.branch).toBe('feature');
+    expect(u.head).toBe(fx.shas.f2);
+    expect(u.counts).toEqual({ changed: 2, untracked: 1 });
+    const byPath = Object.fromEntries(u.files.map((f) => [f.path, f]));
+    expect(byPath['lib/b.js']).toMatchObject({ status: 'M', area: 'unstaged', additions: 1, deletions: 0, binary: false });
+    expect(byPath['staged.txt']).toMatchObject({ status: 'A', area: 'staged', additions: 1, deletions: 0 });
+    expect(byPath['scratch.txt']).toMatchObject({ status: 'A', area: 'untracked', additions: 1, deletions: 0, binary: false });
+    expect(u.totals).toEqual({ files: 3, additions: 3, deletions: 0 });
+
+    const clean = await service.uncommittedFiles({ worktree: fx.mainDir });
+    expect(clean.files).toEqual([]);
+    expect(clean.totals).toEqual({ files: 0, additions: 0, deletions: 0 });
+  });
+
+  test('uncommitted file diffs come from the working tree, untracked files included', async () => {
+    const edited = await service.uncommittedFile({ worktree: fx.featureDir, path: 'lib/b.js' });
+    expect(edited.area).toBe('unstaged');
+    expect(edited.diff).toMatch(/^diff --git a\/lib\/b\.js b\/lib\/b\.js/);
+    expect(edited.diff).toMatch(/\+\/\/ uncommitted edit/);
+
+    const staged = await service.uncommittedFile({ worktree: fx.featureDir, path: 'staged.txt' });
+    expect(staged.area).toBe('staged');
+    expect(staged.diff).toMatch(/new file mode 100644/);
+    expect(staged.diff).toMatch(/\+staged content/);
+
+    const untracked = await service.uncommittedFile({ worktree: fx.featureDir, path: 'scratch.txt' });
+    expect(untracked.area).toBe('untracked');
+    expect(untracked.diff).toBe(
+      'diff --git a/scratch.txt b/scratch.txt\nnew file mode 100644\n--- /dev/null\n+++ b/scratch.txt\n@@ -0,0 +1,1 @@\n+untracked\n',
+    );
+
+    // Only paths git reports as changed can be read; nothing else on disk.
+    expect(await status(service.uncommittedFile({ worktree: fx.featureDir, path: 'README.md' }))).toBe(404);
+    expect(await status(service.uncommittedFile({ worktree: fx.featureDir, path: '../repo/README.md' }))).toBe(404);
+    expect(await status(service.uncommittedFile({ worktree: fx.featureDir }))).toBe(400);
+  });
+
+  test('uncommitted patch bundles tracked and untracked changes', async () => {
+    const p = await service.uncommittedPatch({ worktree: fx.featureDir });
+    expect(p.filename).toBe('feature-uncommitted.patch');
+    expect(p.text).toMatch(/diff --git a\/lib\/b\.js/);
+    expect(p.text).toMatch(/diff --git a\/staged\.txt/);
+    expect(p.text).toMatch(/diff --git a\/scratch\.txt b\/scratch\.txt\nnew file mode 100644/);
+    expect(p.text).toMatch(/\+untracked/);
   });
 
   test('a worktree can be addressed by id as well as by path', async () => {
