@@ -24,6 +24,7 @@ import {
   type ChangedFile,
   type Commit,
   type CommitInfo,
+  type DiffOptions,
   type MergeTreeResult,
   type RepoInfo,
   type ResolvedRef,
@@ -157,6 +158,23 @@ const BRANCH_TTL = 60_000;
 const UNCOMMITTED_TTL = 1_500;
 
 export const UNKNOWN_MERGE: MergeStatus = { state: 'unknown', via: null, conflicts: null };
+
+/** Lines of context asked for when `context=all`: enough for any whole file. */
+export const FULL_CONTEXT = 1_000_000;
+
+/**
+ * Read the display options shared by every diff and patch route:
+ *  - context:    unchanged lines around each change, a number or "all" (default 3)
+ *  - whitespace: "ignore" leaves out changes that only touch whitespace
+ * Anything unrecognised falls back to git's defaults.
+ */
+export function diffOptions({ context, whitespace }: Params): DiffOptions {
+  const n = context === 'all' ? FULL_CONTEXT : context ? Number(context) : NaN;
+  return {
+    context: Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 0), FULL_CONTEXT) : 3,
+    ignoreWhitespace: whitespace === 'ignore',
+  };
+}
 
 interface Context {
   wt: WorktreeRow;
@@ -349,18 +367,18 @@ export class RepoService {
     return file;
   }
 
-  async uncommittedFile({ worktree: key, path: filePath, oldPath, context }: Params): Promise<UncommittedFilePayload> {
-    const wt = await this.requireWorktree(key);
-    const file = await this.requireUncommittedFile(wt, filePath, oldPath);
-    const lines = Math.min(Math.max(Number(context) || 3, 0), 100000);
-    const diff = await workingTreeFileDiff(wt.path, file, { context: lines });
+  async uncommittedFile(params: Params): Promise<UncommittedFilePayload> {
+    const wt = await this.requireWorktree(params.worktree);
+    const file = await this.requireUncommittedFile(wt, params.path, params.oldPath);
+    const diff = await workingTreeFileDiff(wt.path, file, diffOptions(params));
     return { path: file.path, oldPath: file.oldPath, area: file.area, diff };
   }
 
-  async uncommittedPatch({ worktree: key }: Params): Promise<{ filename: string; text: string }> {
-    const wt = await this.requireWorktree(key);
+  async uncommittedPatch(params: Params): Promise<{ filename: string; text: string }> {
+    const wt = await this.requireWorktree(params.worktree);
     const { files } = await this.uncommittedListCached(wt);
-    const text = await workingTreePatch(wt.path, files.filter((f) => f.area === 'untracked').map((f) => f.path));
+    const untracked = files.filter((f) => f.area === 'untracked').map((f) => f.path);
+    const text = await workingTreePatch(wt.path, untracked, diffOptions(params));
     const label = (wt.branch || wt.head.slice(0, 10)).replace(/[^\w.-]+/g, '_');
     return { filename: `${label}-uncommitted.patch`, text };
   }
@@ -381,19 +399,19 @@ export class RepoService {
     return { ...shape, ahead, behind, totals, merge: describeMerge(ctx, ahead, mt), commits, files };
   }
 
-  async file({ path: filePath, oldPath, context, ...params }: Params): Promise<FilePayload> {
+  async file({ path: filePath, oldPath, ...params }: Params): Promise<FilePayload> {
     if (!filePath) throw new HttpError(400, 'Missing "path" parameter');
     const ctx = await this.context(params);
     if (!ctx.mb) throw new HttpError(409, 'No common history between worktree and base');
-    const lines = Math.min(Math.max(Number(context) || 3, 0), 100000);
-    const diff = await fileDiff(ctx.cwd, ctx.mb, ctx.head, { path: filePath, oldPath: oldPath || null }, { context: lines });
+    const file = { path: filePath, oldPath: oldPath || null };
+    const diff = await fileDiff(ctx.cwd, ctx.mb, ctx.head, file, diffOptions(params));
     return { path: filePath, oldPath: oldPath || null, mergeBase: ctx.mb, diff };
   }
 
   async patch(params: Params): Promise<{ filename: string; text: string }> {
     const ctx = await this.context(params);
     if (!ctx.mb) throw new HttpError(409, 'No common history between worktree and base');
-    const text = await fullDiff(ctx.cwd, ctx.mb, ctx.head);
+    const text = await fullDiff(ctx.cwd, ctx.mb, ctx.head, diffOptions(params));
     const label = (ctx.wt.branch || ctx.head.slice(0, 10)).replace(/[^\w.-]+/g, '_');
     const baseLabel = String(ctx.base).replace(/[^\w.-]+/g, '_');
     return { filename: `${label}-vs-${baseLabel}.patch`, text };
@@ -434,17 +452,17 @@ export class RepoService {
     return { worktree: wt, commit, parents, parent: parents[0] ?? null, files, totals };
   }
 
-  async commitFile({ path: filePath, oldPath, context, ...params }: Params): Promise<CommitFilePayload> {
+  async commitFile({ path: filePath, oldPath, ...params }: Params): Promise<CommitFilePayload> {
     if (!filePath) throw new HttpError(400, 'Missing "path" parameter');
     const { cwd, info, from } = await this.commitContext(params);
-    const lines = Math.min(Math.max(Number(context) || 3, 0), 100000);
-    const diff = await fileDiff(cwd, from, info.sha, { path: filePath, oldPath: oldPath || null }, { context: lines });
+    const file = { path: filePath, oldPath: oldPath || null };
+    const diff = await fileDiff(cwd, from, info.sha, file, diffOptions(params));
     return { path: filePath, oldPath: oldPath || null, commit: info.sha, parent: info.parents[0] ?? null, diff };
   }
 
   async commitPatch(params: Params): Promise<{ filename: string; text: string }> {
     const { wt, cwd, info, from } = await this.commitContext(params);
-    const text = await fullDiff(cwd, from, info.sha);
+    const text = await fullDiff(cwd, from, info.sha, diffOptions(params));
     const label = (wt.branch || wt.head.slice(0, 10)).replace(/[^\w.-]+/g, '_');
     return { filename: `${label}-${info.shortSha}.patch`, text };
   }

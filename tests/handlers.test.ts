@@ -94,6 +94,14 @@ describe('API handlers', () => {
     expect(p.headers.get('content-disposition')).toBe(`attachment; filename="feature-${c.commit.shortSha}.patch"`);
     expect(await p.text()).not.toMatch(/gone\.txt/);
 
+    const ws = await (
+      await apiHandlers['commit-file'](
+        req('commit-file', { worktree: fx.featureDir, commit: fx.shas.w2, path: 'ws.js', whitespace: 'ignore', context: 'all' }),
+      )
+    ).json();
+    expect(ws.diff).toMatch(/^@@ -1,40 \+1,40 @@/m);
+    expect(ws.diff).not.toMatch(/^\+    line 5$/m);
+
     expect((await apiHandlers.commit(req('commit', { worktree: fx.featureDir, commit: 'nope' }))).status).toBe(404);
     expect((await apiHandlers.commit(req('commit', { worktree: fx.featureDir }))).status).toBe(400);
   });

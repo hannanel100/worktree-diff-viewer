@@ -437,24 +437,34 @@ export async function diffFiles(cwd: string, from: string, to = 'HEAD'): Promise
   return { files, totals: sumTotals(files) };
 }
 
+/** How a diff is printed: lines of context around each change, and whether whitespace changes count. */
+export interface DiffOptions {
+  context?: number;
+  ignoreWhitespace?: boolean;
+}
+
+function diffOptionArgs({ context = 3, ignoreWhitespace = false }: DiffOptions = {}): string[] {
+  return [`--unified=${context}`, ...(ignoreWhitespace ? ['--ignore-all-space'] : [])];
+}
+
 export async function fileDiff(
   cwd: string,
   from: string,
   to: string,
   file: { path: string; oldPath: string | null },
-  { context = 3 }: { context?: number } = {},
+  options: DiffOptions = {},
 ): Promise<string> {
   // :(literal) stops git from treating '*', '?' or '[' in file names as globs.
   const pathspec = [`:(literal)${file.path}`];
   if (file.oldPath) pathspec.push(`:(literal)${file.oldPath}`);
   return git(
-    ['diff', '-M', `--unified=${context}`, '--no-color', '--no-ext-diff', from, to, '--', ...pathspec],
+    ['diff', '-M', ...diffOptionArgs(options), '--no-color', '--no-ext-diff', from, to, '--', ...pathspec],
     { cwd },
   );
 }
 
-export async function fullDiff(cwd: string, from: string, to: string): Promise<string> {
-  return git(['diff', '-M', '--no-color', '--no-ext-diff', from, to], { cwd });
+export async function fullDiff(cwd: string, from: string, to: string, options: DiffOptions = {}): Promise<string> {
+  return git(['diff', '-M', ...diffOptionArgs(options), '--no-color', '--no-ext-diff', from, to], { cwd });
 }
 
 // Commit records: fields separated by ASCII "unit separator", records by
@@ -632,18 +642,22 @@ export async function uncommittedFiles(cwd: string): Promise<{ files: Uncommitte
 export async function workingTreeFileDiff(
   cwd: string,
   file: { path: string; oldPath: string | null; area: UncommittedArea },
-  { context = 3 }: { context?: number } = {},
+  options: DiffOptions = {},
 ): Promise<string> {
+  // An untracked file is all new lines: neither context nor whitespace changes anything.
   if (file.area === 'untracked') return untrackedFileDiff(cwd, file.path);
   const pathspec = [`:(literal)${file.path}`];
   if (file.oldPath) pathspec.push(`:(literal)${file.oldPath}`);
   return git(
-    ['diff', '-M', `--unified=${context}`, '--no-color', '--no-ext-diff', 'HEAD', '--', ...pathspec],
+    ['diff', '-M', ...diffOptionArgs(options), '--no-color', '--no-ext-diff', 'HEAD', '--', ...pathspec],
     { cwd },
   );
 }
 
-export async function workingTreePatch(cwd: string, untrackedPaths: string[]): Promise<string> {
-  const tracked = await git(['diff', '-M', '--no-color', '--no-ext-diff', 'HEAD'], { cwd, allowFailure: true });
+export async function workingTreePatch(cwd: string, untrackedPaths: string[], options: DiffOptions = {}): Promise<string> {
+  const tracked = await git(['diff', '-M', ...diffOptionArgs(options), '--no-color', '--no-ext-diff', 'HEAD'], {
+    cwd,
+    allowFailure: true,
+  });
   return (tracked.ok ? tracked.stdout : '') + untrackedPaths.map((p) => untrackedFileDiff(cwd, p)).join('');
 }

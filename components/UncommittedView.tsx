@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { UncommittedFilePayload, UncommittedFilesPayload } from '@/lib/repo-service';
 import { api, hrefDiff, hrefOverview, hrefUncommitted, hrefUncommittedPatch } from '@/lib/client/api';
+import { diffOptionParams, useDiffOptions, withDiffOptions } from '@/lib/client/diff-options';
 import { fmtNum, worktreeLabel } from '@/lib/client/format';
 import { ChangeSetView, type ChangeSetFile } from './ChangeSetView';
 import { useRepo } from './RepoProvider';
@@ -21,6 +22,7 @@ export function UncommittedView() {
   const worktree = searchParams.get('worktree') ?? '';
   const base = searchParams.get('base') || repo?.defaultBase || '';
   const fileParam = searchParams.get('file');
+  const [diffOptions, setDiffOptions] = useDiffOptions(searchParams);
 
   const [data, setData] = useState<UncommittedFilesPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,19 +57,23 @@ export function UncommittedView() {
         worktree,
         path: file.path,
         oldPath: file.oldPath,
+        ...diffOptionParams(diffOptions),
       });
       return res.diff;
     },
-    [worktree],
+    [worktree, diffOptions],
   );
 
   const fetchPatch = useCallback(async () => {
-    const res = await fetch(hrefUncommittedPatch(worktree));
+    const res = await fetch(withDiffOptions(hrefUncommittedPatch(worktree), diffOptions));
     if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error || res.statusText);
     return res.text();
-  }, [worktree]);
+  }, [worktree, diffOptions]);
 
-  const hrefForFile = useCallback((path: string) => hrefUncommitted(worktree, base, path), [worktree, base]);
+  const hrefForFile = useCallback(
+    (path: string) => withDiffOptions(hrefUncommitted(worktree, base, path), diffOptions),
+    [worktree, base, diffOptions],
+  );
 
   if (!worktree) return <div className="error">No worktree selected. Go back to the overview.</div>;
   if (error) return <div className="error">{error}</div>;
@@ -101,7 +107,7 @@ export function UncommittedView() {
 
   return (
     <ChangeSetView
-      scopeKey={`uncommitted\0${worktree}\0${version}\0${reloads}`}
+      scopeKey={`uncommitted\0${worktree}\0${version}\0${reloads}\0${diffOptions.context}\0${diffOptions.ignoreWhitespace}`}
       nav={
         <>
           <Link href={hrefOverview(base)} className="back">← Overview</Link>
@@ -121,6 +127,8 @@ export function UncommittedView() {
       fetchFile={fetchFile}
       fetchPatch={fetchPatch}
       patchHref={hrefUncommittedPatch(worktree)}
+      diffOptions={diffOptions}
+      onDiffOptionsChange={setDiffOptions}
     />
   );
 }

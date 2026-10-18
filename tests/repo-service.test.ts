@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
 import { normalizePath } from '@/lib/git';
-import { HttpError, RepoService } from '@/lib/repo-service';
+import { diffOptions, FULL_CONTEXT, HttpError, RepoService } from '@/lib/repo-service';
 import { createFixture, type Fixture } from './fixture';
 
 let fx: Fixture;
@@ -282,6 +282,61 @@ describe('RepoService', () => {
     expect(await status(service.commitFile({ worktree: fx.featureDir, commit: fx.shas.f1 }))).toBe(400);
     expect(await status(service.commitFile({ worktree: fx.featureDir, commit: 'nope', path: 'lib/a.js' }))).toBe(404);
     expect(await status(service.commitPatch({ worktree: fx.featureDir, commit: 'nope' }))).toBe(404);
+  });
+
+  test('diff options are parsed leniently, falling back to git defaults', () => {
+    expect(diffOptions({})).toEqual({ context: 3, ignoreWhitespace: false });
+    expect(diffOptions({ context: '0' })).toEqual({ context: 0, ignoreWhitespace: false });
+    expect(diffOptions({ context: '10', whitespace: 'ignore' })).toEqual({ context: 10, ignoreWhitespace: true });
+    expect(diffOptions({ context: 'all' }).context).toBe(FULL_CONTEXT);
+    expect(diffOptions({ context: '99999999' }).context).toBe(FULL_CONTEXT);
+    expect(diffOptions({ context: '-5' }).context).toBe(0);
+    expect(diffOptions({ context: 'lots' }).context).toBe(3);
+    expect(diffOptions({ context: '' }).context).toBe(3);
+    expect(diffOptions({ whitespace: 'yes' }).ignoreWhitespace).toBe(false);
+  });
+
+  test('ignoring whitespace drops whitespace-only hunks and keeps real ones', async () => {
+    const wt = fx.featureDir;
+    const plain = await service.commitFile({ worktree: wt, commit: fx.shas.w2, path: 'ws.js' });
+    expect(plain.diff).toMatch(/^\+    line 5$/m);
+    expect(plain.diff).toMatch(/^\+line thirty$/m);
+
+    const ignored = await service.commitFile({ worktree: wt, commit: fx.shas.w2, path: 'ws.js', whitespace: 'ignore' });
+    expect(ignored.diff).not.toMatch(/^[-+] *line 5$/m);
+    expect(ignored.diff).toMatch(/^\+line thirty$/m);
+
+    // A file that only changed whitespace keeps its header but has no hunk at all.
+    const only = await service.commitFile({ worktree: wt, commit: fx.shas.w2, path: 'ws-only.txt', whitespace: 'ignore' });
+    expect(only.diff).not.toMatch(/^@@ /m);
+
+    const patch = await service.commitPatch({ worktree: wt, commit: fx.shas.w2, whitespace: 'ignore' });
+    expect(patch.text).toMatch(/^\+line thirty$/m);
+    expect(patch.text).not.toMatch(/^\+a  b  $/m);
+    expect((await service.commitPatch({ worktree: wt, commit: fx.shas.w2 })).text).toMatch(/^\+a  b  $/m);
+  });
+
+  test('context widens to the whole file or narrows to the changed lines only', async () => {
+    const wt = fx.featureDir;
+    const hunks = (diff: string) => diff.match(/^@@ [^@]* @@/gm) ?? [];
+
+    const normal = await service.commitFile({ worktree: wt, commit: fx.shas.w2, path: 'ws.js' });
+    expect(hunks(normal.diff)).toEqual(['@@ -2,7 +2,7 @@', '@@ -27,7 +27,7 @@']);
+
+    const whole = await service.commitFile({ worktree: wt, commit: fx.shas.w2, path: 'ws.js', context: 'all' });
+    expect(hunks(whole.diff)).toEqual(['@@ -1,40 +1,40 @@']);
+    expect(whole.diff).toMatch(/^ line 1$/m);
+    expect(whole.diff).toMatch(/^ line 40$/m);
+
+    const tight = await service.commitFile({ worktree: wt, commit: fx.shas.w2, path: 'ws.js', context: '0' });
+    expect(hunks(tight.diff)).toEqual(['@@ -5 +5 @@', '@@ -30 +30 @@']);
+
+    // The branch diff and its patch take the same options.
+    const file = await service.file({ worktree: wt, base: 'main', path: 'lib/a.js', context: '0' });
+    expect(hunks(file.diff)).toHaveLength(2);
+    expect(hunks((await service.file({ worktree: wt, base: 'main', path: 'lib/a.js' })).diff)).toHaveLength(1);
+    const patch = await service.patch({ worktree: wt, base: 'main', context: '0' });
+    expect(patch.text).not.toMatch(/^ export const b = 2;$/m);
   });
 
   test('any ref works as a base, including a sha', async () => {

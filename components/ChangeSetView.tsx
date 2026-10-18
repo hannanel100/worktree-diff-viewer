@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import type { ChangedFile, Commit, UncommittedArea } from '@/lib/git';
 import { pool } from '@/lib/client/api';
+import { CONTEXT_CHOICES, contextLabel, parseContext, type DiffOptions } from '@/lib/client/diff-options';
 import { relTime, splitPath, statusName } from '@/lib/client/format';
 import { DiffPane, type DiffFormat } from './DiffPane';
 
@@ -37,9 +38,13 @@ export interface ChangeSetViewProps {
   /** File preselected from the URL. */
   initialFile: string | null;
   hrefForFile: (path: string) => string;
+  /** Fetchers must honour `diffOptions`; a new `scopeKey` should follow a change of them. */
   fetchFile: (file: ChangeSetFile) => Promise<string>;
   fetchPatch: () => Promise<string>;
+  /** The download link; always the plain patch, whatever the display options, so it applies cleanly. */
   patchHref: string;
+  diffOptions: DiffOptions;
+  onDiffOptionsChange: (patch: Partial<DiffOptions>) => void;
 }
 
 const COMMITS_HELP =
@@ -93,6 +98,8 @@ export function ChangeSetView({
   fetchFile,
   fetchPatch,
   patchHref,
+  diffOptions,
+  onDiffOptionsChange,
 }: ChangeSetViewProps) {
   const [activePath, setActivePath] = useState<string | null>(initialFile);
   // The commits panel folds itself for long lists, but stays open while a commit is picked.
@@ -293,7 +300,7 @@ export function ChangeSetView({
     applyDrawerWidth(needed + Math.max(0, scrollbar));
   }, [applyDrawerWidth]);
 
-  // --- keyboard: j/k or arrows move between files, f toggles the drawer, [ ] between commits
+  // --- keyboard: j/k or arrows move between files, f toggles the drawer, w whitespace, [ ] between commits
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -301,6 +308,11 @@ export function ChangeSetView({
       if (e.key === 'f') {
         e.preventDefault();
         toggleDrawer();
+        return;
+      }
+      if (e.key === 'w') {
+        e.preventDefault();
+        onDiffOptionsChange({ ignoreWhitespace: !diffOptions.ignoreWhitespace });
         return;
       }
       if (e.key === '[' || e.key === ']') {
@@ -323,7 +335,7 @@ export function ChangeSetView({
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [visibleFiles, activeFile, selectFile, toggleDrawer, onSelectCommit, stepCommit]);
+  }, [visibleFiles, activeFile, selectFile, toggleDrawer, onSelectCommit, stepCommit, diffOptions, onDiffOptionsChange]);
 
   const changeFormat = (f: DiffFormat) => {
     setFormat(f);
@@ -331,6 +343,21 @@ export function ChangeSetView({
   };
 
   const activeIndex = activeFile ? files.indexOf(activeFile) + 1 : 0;
+
+  // With whitespace ignored, a file whose only changes are whitespace comes back without hunks.
+  const whitespaceOnly =
+    diffOptions.ignoreWhitespace &&
+    !allFiles &&
+    !loadingLabel &&
+    text !== null &&
+    activeFile !== null &&
+    !activeFile.binary &&
+    activeFile.additions + activeFile.deletions > 0 &&
+    !/^@@ /m.test(text);
+
+  const contextChoices = CONTEXT_CHOICES.includes(diffOptions.context)
+    ? CONTEXT_CHOICES
+    : [...CONTEXT_CHOICES, diffOptions.context];
 
   return (
     <section className="diff-view">
@@ -481,13 +508,51 @@ export function ChangeSetView({
             <label className="check">
               <input type="checkbox" checked={allFiles} onChange={(e) => setAllFiles(e.target.checked)} /> All files
             </label>
+            <label className="check" title="Hide changes that only add, remove or alter whitespace (w)">
+              <input
+                type="checkbox"
+                checked={diffOptions.ignoreWhitespace}
+                onChange={(e) => onDiffOptionsChange({ ignoreWhitespace: e.target.checked })}
+              />{' '}
+              Ignore whitespace
+            </label>
+            <label className="check" title="Unchanged lines shown around each change">
+              Context
+              <select
+                className="toolbar-select"
+                value={String(diffOptions.context)}
+                onChange={(e) => onDiffOptionsChange({ context: parseContext(e.target.value) ?? 3 })}
+              >
+                {contextChoices.map((c) => (
+                  <option key={c} value={String(c)}>
+                    {contextLabel(c)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <span className="spacer" />
             <a className="btn btn-quiet" href={patchHref} download>
               Download .patch
             </a>
           </div>
           <div ref={renderRef} className="render-host">
-            <DiffPane text={text} format={format} loading={loading ?? loadingLabel} error={error ?? paneError} />
+            <DiffPane
+              text={text}
+              format={format}
+              loading={loading ?? loadingLabel}
+              error={error ?? paneError}
+              notice={
+                whitespaceOnly ? (
+                  <>
+                    This file only changes whitespace.
+                    <br />
+                    <button type="button" className="btn" onClick={() => onDiffOptionsChange({ ignoreWhitespace: false })}>
+                      Show whitespace changes
+                    </button>
+                  </>
+                ) : null
+              }
+            />
           </div>
         </div>
       </div>

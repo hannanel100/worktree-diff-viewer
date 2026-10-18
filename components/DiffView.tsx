@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { CommitFilePayload, CommitPayload, DiffPayload, FilePayload, UncommittedPayload } from '@/lib/repo-service';
 import { api, hrefCommitPatch, hrefDiff, hrefOverview, hrefPatch, hrefUncommitted } from '@/lib/client/api';
+import { diffOptionParams, useDiffOptions, withDiffOptions } from '@/lib/client/diff-options';
 import { fmtNum, relTime, worktreeLabel } from '@/lib/client/format';
 import { ChangeSetView, type ChangeSetFile } from './ChangeSetView';
 import { useRepo } from './RepoProvider';
@@ -22,6 +23,7 @@ export function DiffView() {
   const base = searchParams.get('base') || repo?.defaultBase || '';
   const fileParam = searchParams.get('file');
   const commitParam = searchParams.get('commit');
+  const [diffOptions, setDiffOptions] = useDiffOptions(searchParams);
 
   const [data, setData] = useState<DiffPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,9 +76,9 @@ export function DiffView() {
   const selectCommit = useCallback(
     (sha: string | null) => {
       setCommitSha(sha);
-      window.history.replaceState(null, '', hrefDiff(worktree, base, null, sha));
+      window.history.replaceState(null, '', withDiffOptions(hrefDiff(worktree, base, null, sha), diffOptions));
     },
-    [worktree, base],
+    [worktree, base, diffOptions],
   );
 
   const fetchFile = useCallback(
@@ -87,24 +89,34 @@ export function DiffView() {
           commit: commitSha,
           path: file.path,
           oldPath: file.oldPath,
+          ...diffOptionParams(diffOptions),
         });
         return res.diff;
       }
-      const res = await api<FilePayload>('/api/file', { worktree, base, path: file.path, oldPath: file.oldPath });
+      const res = await api<FilePayload>('/api/file', {
+        worktree,
+        base,
+        path: file.path,
+        oldPath: file.oldPath,
+        ...diffOptionParams(diffOptions),
+      });
       return res.diff;
     },
-    [worktree, base, commitSha],
+    [worktree, base, commitSha, diffOptions],
   );
 
   const patchHref = commitSha ? hrefCommitPatch(worktree, commitSha) : hrefPatch(worktree, base);
 
   const fetchPatch = useCallback(async () => {
-    const res = await fetch(patchHref);
+    const res = await fetch(withDiffOptions(patchHref, diffOptions));
     if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error || res.statusText);
     return res.text();
-  }, [patchHref]);
+  }, [patchHref, diffOptions]);
 
-  const hrefForFile = useCallback((path: string) => hrefDiff(worktree, base, path, commitSha), [worktree, base, commitSha]);
+  const hrefForFile = useCallback(
+    (path: string) => withDiffOptions(hrefDiff(worktree, base, path, commitSha), diffOptions),
+    [worktree, base, commitSha, diffOptions],
+  );
 
   if (!worktree) return <div className="error">No worktree selected. Go back to the overview.</div>;
   if (error) return <div className="error">{error}</div>;
@@ -198,7 +210,7 @@ export function DiffView() {
 
   return (
     <ChangeSetView
-      scopeKey={`diff\0${worktree}\0${base}\0${version}\0${commitSha ?? ''}`}
+      scopeKey={`diff\0${worktree}\0${base}\0${version}\0${commitSha ?? ''}\0${diffOptions.context}\0${diffOptions.ignoreWhitespace}`}
       nav={
         <>
           <Link href={hrefOverview(base)} className="back">← Overview</Link>
@@ -246,6 +258,8 @@ export function DiffView() {
       fetchFile={fetchFile}
       fetchPatch={fetchPatch}
       patchHref={patchHref}
+      diffOptions={diffOptions}
+      onDiffOptionsChange={setDiffOptions}
     />
   );
 }

@@ -44,7 +44,18 @@ remembered in the browser.
   whole width, and resize by dragging its edge (double-click the edge to fit
   the longest file name); `j`/`k` keep working while it is closed
 - side-by-side or unified rendering with syntax highlighting (diff2html)
+- **Ignore whitespace** (toolbar or `w`) hides changes that only add, remove
+  or re-indent whitespace; a file whose only change is whitespace says so
+  instead of showing an empty diff
+- **Context**: 3, 10 or 25 unchanged lines around each change, or the whole
+  file
 - "All files" mode, and a `.patch` download of the whole diff
+
+Whitespace and context apply to every screen (branch diff, single commit,
+uncommitted changes) and to "All files". They are kept in the URL
+(`&whitespace=ignore&context=all`), so a shared link shows the same view, and
+the last choice is remembered in the browser for pages opened without them.
+The `.patch` download is always the plain diff, so it applies cleanly.
 
 The diff is always `merge-base(base, HEAD)..HEAD`, i.e. what the branch
 changed since it diverged. Commits the base gained after the fork do not show
@@ -186,6 +197,11 @@ Only paths that `git status` itself reports can be diffed on the uncommitted
 screen; untracked files are read from disk to build a new-file diff, so no
 other file in the worktree is ever readable through the API.
 
+Every route that returns a diff or a patch (`file`, `patch`, `commit-file`,
+`commit-patch`, `uncommitted-file`, `uncommitted-patch`) also takes
+`context` (lines of context, a number or `all`; default 3) and
+`whitespace=ignore` (`git diff --ignore-all-space`).
+
 `worktree` is a path exactly as `git worktree list` prints it (or the row id
 from `/api/repo`); `commit` is a full sha (any ref git resolves to a commit is
 accepted). Spawning git is the dominant cost (hundreds of ms per process on
@@ -198,8 +214,8 @@ of refs.
 
 Ideas for later versions, roughly in order of usefulness:
 
-- **Whitespace and context controls** – ignore whitespace, widen context,
-  expand collapsed lines.
+- **Expand collapsed lines** between hunks on demand (the whole-file context
+  covers most of it today).
 - **Review aids** – mark files as viewed, collapse viewed files, remember
   position per worktree/base.
 - **Compare two worktrees directly**, not only worktree vs base branch.

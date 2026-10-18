@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Diff2HtmlUI } from 'diff2html/lib/ui/js/diff2html-ui.js';
 import { ColorSchemeType } from 'diff2html/lib/types.js';
 
@@ -13,10 +13,12 @@ interface Props {
   format: DiffFormat;
   loading: string | null;
   error: string | null;
+  /** Shown in place of the diff, e.g. to explain why there is nothing to see. */
+  notice?: ReactNode;
 }
 
 /** Renders a unified diff with diff2html inside a scroll pane. */
-export function DiffPane({ text, format, loading, error }: Props) {
+export function DiffPane({ text, format, loading, error, notice = null }: Props) {
   const [forceLarge, setForceLarge] = useState(false);
   useEffect(() => setForceLarge(false), [text]);
 
@@ -27,11 +29,12 @@ export function DiffPane({ text, format, loading, error }: Props) {
     <div className="render">
       {error && <div className="error">{error}</div>}
       {!error && loading && <div className="loading">{loading}</div>}
-      {!error && !loading && text === null && <div className="placeholder">Nothing to show.</div>}
-      {!error && !loading && isEmpty && (
+      {!error && !loading && notice && <div className="placeholder">{notice}</div>}
+      {!error && !loading && !notice && text === null && <div className="placeholder">Nothing to show.</div>}
+      {!error && !loading && !notice && isEmpty && (
         <div className="placeholder">No textual changes (binary file or identical content).</div>
       )}
-      {!error && !loading && isLarge && (
+      {!error && !loading && !notice && isLarge && (
         <div className="placeholder">
           This diff is large ({(text.length / 1024 / 1024).toFixed(1)} MB) and may take a while to render.
           <br />
@@ -40,7 +43,7 @@ export function DiffPane({ text, format, loading, error }: Props) {
           </button>
         </div>
       )}
-      {!error && !loading && text !== null && !isEmpty && !isLarge && <Rendered text={text} format={format} />}
+      {!error && !loading && !notice && text !== null && !isEmpty && !isLarge && <Rendered text={text} format={format} />}
     </div>
   );
 }

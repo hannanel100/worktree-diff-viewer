@@ -7,6 +7,10 @@
 //   squashed:        s1, whose change main received as the fresh commit c4
 //   conflict:        x1, edits the README line main changed in c2
 //   orphan:          no shared history at all
+//
+// plus two commits on no branch at all (reachable only by sha), for the diff
+// display options: w1 adds ws.js (40 lines) and ws-only.txt, w2 re-indents
+// line 5 and rewords line 30 of ws.js and only changes spacing in ws-only.txt.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -37,7 +41,7 @@ export interface Fixture {
   squashedDir: string;
   conflictDir: string;
   orphanDir: string;
-  shas: { c1: string; c2: string; c3: string; f1: string; f2: string };
+  shas: { c1: string; c2: string; c3: string; f1: string; f2: string; w1: string; w2: string };
   cleanup(): void;
 }
 
@@ -135,6 +139,24 @@ export function createFixture(): Fixture {
   git(orphanDir, 'add', '-A');
   git(orphanDir, 'commit', '-q', '-m', 'o1: orphan');
 
+  // whitespace commits, on a branch that is deleted again so no listing changes
+  const wsLines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+  git(mainDir, 'checkout', '-q', '-b', 'ws-tmp');
+  write(mainDir, 'ws.js', wsLines.join('\n') + '\n');
+  write(mainDir, 'ws-only.txt', 'a b\n');
+  git(mainDir, 'add', '-A');
+  git(mainDir, 'commit', '-q', '-m', 'w1: whitespace fixtures');
+  const w1 = git(mainDir, 'rev-parse', 'HEAD');
+  wsLines[4] = '    line 5';
+  wsLines[29] = 'line thirty';
+  write(mainDir, 'ws.js', wsLines.join('\n') + '\n');
+  write(mainDir, 'ws-only.txt', 'a  b  \n');
+  git(mainDir, 'add', '-A');
+  git(mainDir, 'commit', '-q', '-m', 'w2: re-indent and reword');
+  const w2 = git(mainDir, 'rev-parse', 'HEAD');
+  git(mainDir, 'checkout', '-q', 'main');
+  git(mainDir, 'branch', '-q', '-D', 'ws-tmp');
+
   return {
     root,
     mainDir,
@@ -143,7 +165,7 @@ export function createFixture(): Fixture {
     squashedDir,
     conflictDir,
     orphanDir,
-    shas: { c1, c2, c3, f1, f2 },
+    shas: { c1, c2, c3, f1, f2, w1, w2 },
     cleanup() {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
