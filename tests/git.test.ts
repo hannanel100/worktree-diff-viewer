@@ -16,6 +16,7 @@ import {
   shortRefName,
   sumTotals,
   untrackedFileDiff,
+  workingTreeStamp,
 } from '@/lib/git';
 
 describe('git output parsers', () => {
@@ -69,12 +70,12 @@ describe('git output parsers', () => {
     ].join('\0');
     const files = parseRawNumstat(raw);
     expect(files).toEqual([
-      { status: 'M', similarity: null, path: 'assets/logo.bin', oldPath: null, additions: 0, deletions: 0, binary: true },
-      { status: 'D', similarity: null, path: 'gone.txt', oldPath: null, additions: 0, deletions: 1, binary: false },
-      { status: 'M', similarity: null, path: 'lib/a.js', oldPath: null, additions: 2, deletions: 1, binary: false },
-      { status: 'A', similarity: null, path: 'lib/b.js', oldPath: null, additions: 1, deletions: 0, binary: false },
-      { status: 'R', similarity: 87, path: 'new-name.txt', oldPath: 'old-name.txt', additions: 0, deletions: 0, binary: false },
-      { status: 'C', similarity: 100, path: 'copy.txt', oldPath: 'src.txt', additions: 3, deletions: 0, binary: false },
+      { status: 'M', similarity: null, path: 'assets/logo.bin', oldPath: null, additions: 0, deletions: 0, binary: true, oldBlob: '2559ac2', blob: '3645c83' },
+      { status: 'D', similarity: null, path: 'gone.txt', oldPath: null, additions: 0, deletions: 1, binary: false, oldBlob: '4202011', blob: null },
+      { status: 'M', similarity: null, path: 'lib/a.js', oldPath: null, additions: 2, deletions: 1, binary: false, oldBlob: '26b8d7a', blob: '572c7d5' },
+      { status: 'A', similarity: null, path: 'lib/b.js', oldPath: null, additions: 1, deletions: 0, binary: false, oldBlob: null, blob: '066f32c' },
+      { status: 'R', similarity: 87, path: 'new-name.txt', oldPath: 'old-name.txt', additions: 0, deletions: 0, binary: false, oldBlob: 'f985857', blob: 'f985857' },
+      { status: 'C', similarity: 100, path: 'copy.txt', oldPath: 'src.txt', additions: 3, deletions: 0, binary: false, oldBlob: 'f985857', blob: 'f985857' },
     ]);
     expect(sumTotals(files)).toEqual({ files: 6, additions: 6, deletions: 2 });
     expect(parseRawNumstat('')).toEqual([]);
@@ -125,6 +126,7 @@ describe('git output parsers', () => {
       ['unmerged', 'U', 'U', 'conflict.txt', null],
       ['untracked', '?', '?', 'scratch.txt', null],
     ]);
+    expect(entries.map((e) => e.headBlob)).toEqual(['abc', null, 'abc', 'abc', 'abc', null, null]);
     expect(entries.map((e) => `${describeUncommitted(e).status}/${describeUncommitted(e).area}`)).toEqual([
       'M/unstaged', 'A/staged', 'M/both', 'D/unstaged', 'R/staged', 'U/conflict', 'A/untracked',
     ]);
@@ -148,6 +150,23 @@ describe('git output parsers', () => {
       expect(countNewFile(dir, 'noeol.txt')).toEqual({ additions: 1, deletions: 0, binary: false });
       expect(countNewFile(dir, 'bin.dat')).toEqual({ additions: 0, deletions: 0, binary: true });
       expect(countNewFile(dir, 'missing.txt')).toEqual({ additions: 0, deletions: 0, binary: false });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('workingTreeStamp changes when a file is saved and says when it is gone', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wtdiff-stamp-'));
+    try {
+      const file = path.join(dir, 'a.txt');
+      fs.writeFileSync(file, 'one\n');
+      fs.utimesSync(file, 1_000_000, 1_000_000);
+      const first = workingTreeStamp(dir, 'a.txt');
+      expect(first).toBe('4:1000000000');
+      fs.writeFileSync(file, 'one\n');
+      fs.utimesSync(file, 1_000_001, 1_000_001);
+      expect(workingTreeStamp(dir, 'a.txt')).not.toBe(first);
+      expect(workingTreeStamp(dir, 'missing.txt')).toBe('missing');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

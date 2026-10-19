@@ -46,6 +46,13 @@ export interface ChangedFile {
   additions: number;
   deletions: number;
   binary: boolean;
+  /**
+   * Blob ids of the old and new side, as `git diff --raw` prints them; null
+   * where that side has no file (added, deleted) or no blob (the working tree).
+   * Together they say whether a file's diff is still the one a reviewer saw.
+   */
+  oldBlob: string | null;
+  blob: string | null;
 }
 
 export interface Totals {
@@ -78,6 +85,12 @@ export type UncommittedArea = 'staged' | 'unstaged' | 'both' | 'untracked' | 'co
 
 export interface UncommittedFile extends ChangedFile {
   area: UncommittedArea;
+  /**
+   * The working-tree file's size and modification time (`size:mtimeMs`), or
+   * "missing" when it is gone. The working tree has no blob id without hashing
+   * the file, and this is what changes when it is saved.
+   */
+  stamp: string;
 }
 
 export interface StatusEntry {
@@ -87,6 +100,8 @@ export interface StatusEntry {
   y: string;
   path: string;
   oldPath: string | null;
+  /** Blob id of the path in HEAD, or null (new, untracked or conflicted). */
+  headBlob: string | null;
 }
 
 export interface ResolvedRef {
@@ -395,6 +410,11 @@ function parseNumstatTokens(tokens: string[], start: number): { byPath: Map<stri
   return { byPath, next: i };
 }
 
+/** A blob id as git prints it, or null for the all-zero id of a missing side. */
+function blobId(sha: string | undefined): string | null {
+  return sha && /[1-9a-f]/.test(sha) ? sha : null;
+}
+
 /**
  * Parse the output of `git diff --raw --numstat -z -M`: raw entries
  * (`:mode mode sha sha STATUS\0path\0`, renames carry two paths) followed by
@@ -405,15 +425,16 @@ export function parseRawNumstat(raw: string): ChangedFile[] {
   const files: Omit<ChangedFile, 'additions' | 'deletions' | 'binary'>[] = [];
   let i = 0;
   while (i < tokens.length && tokens[i].startsWith(':')) {
-    const header = tokens[i++];
-    const status = header.slice(header.lastIndexOf(' ') + 1);
+    // :oldmode newmode oldsha newsha STATUS
+    const [, , oldSha, newSha, status] = tokens[i++].split(' ');
+    const blobs = { oldBlob: blobId(oldSha), blob: blobId(newSha) };
     const kind = status[0] as FileStatus;
     if (kind === 'R' || kind === 'C') {
       const oldPath = tokens[i++];
       const newPath = tokens[i++];
-      files.push({ status: kind, similarity: Number(status.slice(1)) || null, path: newPath, oldPath });
+      files.push({ status: kind, similarity: Number(status.slice(1)) || null, path: newPath, oldPath, ...blobs });
     } else {
-      files.push({ status: kind, similarity: null, path: tokens[i++], oldPath: null });
+      files.push({ status: kind, similarity: null, path: tokens[i++], oldPath: null, ...blobs });
     }
   }
   const { byPath } = parseNumstatTokens(tokens, i);
@@ -432,7 +453,8 @@ export function sumTotals(files: ChangedFile[]): Totals {
 }
 
 export async function diffFiles(cwd: string, from: string, to = 'HEAD'): Promise<{ files: ChangedFile[]; totals: Totals }> {
-  const out = await git(['diff', '--raw', '--numstat', '-z', '-M', from, to], { cwd });
+  // --no-abbrev: blob ids stay the same length as the repository grows.
+  const out = await git(['diff', '--raw', '--no-abbrev', '--numstat', '-z', '-M', from, to], { cwd });
   const files = parseRawNumstat(out);
   return { files, totals: sumTotals(files) };
 }
@@ -530,16 +552,16 @@ export function parseStatusV2Entries(raw: string): StatusEntry[] {
     const parts = entry.split(' ');
     if (kind === '1') {
       // 1 XY sub mH mI mW hH hI path
-      out.push({ kind: 'changed', x: parts[1][0], y: parts[1][1], path: parts.slice(8).join(' '), oldPath: null });
+      out.push({ kind: 'changed', x: parts[1][0], y: parts[1][1], path: parts.slice(8).join(' '), oldPath: null, headBlob: blobId(parts[6]) });
     } else if (kind === '2') {
       // 2 XY sub mH mI mW hH hI Xscore path NUL origPath
       const oldPath = tokens[++i] ?? null;
-      out.push({ kind: 'renamed', x: parts[1][0], y: parts[1][1], path: parts.slice(9).join(' '), oldPath });
+      out.push({ kind: 'renamed', x: parts[1][0], y: parts[1][1], path: parts.slice(9).join(' '), oldPath, headBlob: blobId(parts[6]) });
     } else if (kind === 'u') {
       // u XY sub m1 m2 m3 mW h1 h2 h3 path
-      out.push({ kind: 'unmerged', x: parts[1][0], y: parts[1][1], path: parts.slice(10).join(' '), oldPath: null });
+      out.push({ kind: 'unmerged', x: parts[1][0], y: parts[1][1], path: parts.slice(10).join(' '), oldPath: null, headBlob: null });
     } else if (kind === '?') {
-      out.push({ kind: 'untracked', x: '?', y: '?', path: entry.slice(2), oldPath: null });
+      out.push({ kind: 'untracked', x: '?', y: '?', path: entry.slice(2), oldPath: null, headBlob: null });
     }
     // '!' (ignored) entries never appear: --ignored is not passed.
   }
@@ -599,6 +621,16 @@ function splitLines(text: string): { lines: string[]; trailingNewline: boolean }
   return { lines, trailingNewline };
 }
 
+/** Size and modification time of a working-tree file: cheap, and changes whenever the file is saved. */
+export function workingTreeStamp(cwd: string, relPath: string): string {
+  try {
+    const stat = fs.lstatSync(path.join(cwd, relPath));
+    return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+  } catch {
+    return 'missing';
+  }
+}
+
 /** Line counts for an untracked file, read straight from disk (HEAD has nothing to diff against). */
 export function countNewFile(cwd: string, relPath: string): { additions: number; deletions: number; binary: boolean } {
   const file = readNewFile(cwd, relPath);
@@ -634,7 +666,17 @@ export async function uncommittedFiles(cwd: string): Promise<{ files: Uncommitte
     const { status, area } = describeUncommitted(e);
     const counts =
       area === 'untracked' ? countNewFile(cwd, e.path) : (stats.get(e.path) ?? { additions: 0, deletions: 0, binary: false });
-    return { status, similarity: null, path: e.path, oldPath: e.oldPath, area, ...counts };
+    return {
+      status,
+      similarity: null,
+      path: e.path,
+      oldPath: e.oldPath,
+      area,
+      ...counts,
+      oldBlob: e.headBlob,
+      blob: null,
+      stamp: workingTreeStamp(cwd, e.path),
+    };
   });
   return { files, totals: sumTotals(files) };
 }

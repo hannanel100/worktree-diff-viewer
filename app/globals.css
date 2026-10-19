@@ -378,7 +378,7 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .commits li.whole-branch .sha { color: var(--fg-muted); }
 
 .file-filter { padding: 8px 10px 4px; }
-.file-filter input {
+.file-filter input[type="search"] {
   width: 100%; padding: 5px 9px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg); color: var(--fg); font: inherit; font-size: 12.5px;
 }
@@ -456,3 +456,31 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
   .repo-root { display: none; }
   .base-picker input { width: 160px; }
 }
+
+/* --- review aids: viewed marks ------------------------------------------- */
+.file-filter .check { margin-top: 6px; font-size: 12px; }
+.file-list.has-viewed li { grid-template-columns: 14px 18px 1fr auto; }
+.file-list .viewed-check { margin: 0; width: 13px; height: 13px; cursor: pointer; accent-color: var(--add); }
+.file-list li.is-viewed .name,
+.file-list li.is-viewed .counts { opacity: 0.55; }
+.file-list li.is-viewed .name { text-decoration: line-through; text-decoration-color: var(--fg-muted); }
+.viewed-progress { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); font-size: 12.5px; white-space: nowrap; }
+.viewed-progress.is-done { color: var(--add); font-weight: 600; }
+.viewed-bar { width: 56px; height: 6px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; border: 1px solid var(--border); }
+.viewed-bar > span { display: block; height: 100%; background: var(--add); transition: width 0.15s ease; }
+.render .d2h-file-collapse { cursor: pointer; user-select: none; }
+.render .d2h-file-wrapper.is-viewed .d2h-file-name { color: var(--fg-muted); }
+.render .d2h-file-wrapper.is-collapsed > .d2h-file-diff,
+.render .d2h-file-wrapper.is-collapsed > .d2h-files-diff { display: none; }
+.render .d2h-file-wrapper.is-collapsed .d2h-file-header { border-bottom: none !important; }
+.wt-table .viewed-all { color: var(--add); font-weight: 600; }
+
+/* --- open in editor ------------------------------------------------------ */
+.render .d2h-open-editor { margin-left: auto; margin-right: 10px; font-size: 12px; white-space: nowrap; }
+.render .d2h-open-editor + .d2h-file-collapse { margin-left: 0; }
+.render .has-editor .line-num2,
+.render .has-editor .d2h-file-side-diff + .d2h-file-side-diff .d2h-code-side-linenumber { cursor: pointer; }
+.render .has-editor .line-num2:hover,
+.render .has-editor .d2h-file-side-diff + .d2h-file-side-diff .d2h-code-side-linenumber:hover { color: var(--accent); text-decoration: underline; }
+.open-worktree { font-size: 12px; white-space: nowrap; }
+.row-actions { display: inline-flex; gap: 12px; white-space: nowrap; }

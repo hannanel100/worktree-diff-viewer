@@ -5,14 +5,20 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { ChangedFile, Commit, UncommittedArea } from '@/lib/git';
 import { pool } from '@/lib/client/api';
 import { CONTEXT_CHOICES, contextLabel, parseContext, type DiffOptions } from '@/lib/client/diff-options';
+import { EDITORS, editorLabel, editorUrl, joinPath, useEditor, type EditorId } from '@/lib/client/editor';
 import { relTime, splitPath, statusName } from '@/lib/client/format';
-import { DiffPane, type DiffFormat } from './DiffPane';
+import { lastFile, nextUnviewed, useViewed, type ReviewScope } from '@/lib/client/viewed';
+import { DiffPane, type DiffFormat, type PaneReview } from './DiffPane';
 
-export type ChangeSetFile = ChangedFile & { area?: UncommittedArea };
+export type ChangeSetFile = ChangedFile & { area?: UncommittedArea; stamp?: string };
 
 export interface ChangeSetViewProps {
   /** Identifies the change set (worktree + base, or worktree + reload); a new key resets caches. */
   scopeKey: string;
+  /** Where viewed marks of these files are kept; null while it is not known yet. */
+  reviewScope: ReviewScope | null;
+  /** The worktree directory, for "open in editor" links. */
+  worktreePath: string;
   /** Links at the left of the header, e.g. back to the overview. */
   nav: ReactNode;
   title: string;
@@ -52,6 +58,7 @@ const COMMITS_HELP =
   'Keys: ] moves down the list to the next older commit, [ moves up to the newer one and back to the whole branch.';
 
 const FORMAT_KEY = 'wtdiff.format';
+const HIDE_VIEWED_KEY = 'wtdiff.hideViewed';
 const DRAWER_KEY = 'wtdiff.drawer';
 const DRAWER_WIDTH_KEY = 'wtdiff.drawerWidth';
 const DRAWER_DEFAULT_WIDTH = 340;
@@ -81,6 +88,8 @@ function loadDrawerWidth(): number {
  */
 export function ChangeSetView({
   scopeKey,
+  reviewScope,
+  worktreePath,
   nav,
   title,
   badge,
@@ -101,7 +110,8 @@ export function ChangeSetView({
   diffOptions,
   onDiffOptionsChange,
 }: ChangeSetViewProps) {
-  const [activePath, setActivePath] = useState<string | null>(initialFile);
+  // Without a file in the URL, reopen the one that was open last in this scope.
+  const [activePath, setActivePath] = useState<string | null>(() => initialFile ?? lastFile(reviewScope?.id ?? null));
   // The commits panel folds itself for long lists, but stays open while a commit is picked.
   const [commitsOpen, setCommitsOpen] = useState<boolean>(
     () => activeCommit !== null || (commits !== undefined && commits.length > 0 && commits.length <= 8),
@@ -114,6 +124,10 @@ export function ChangeSetView({
   const [drawerWidth, setDrawerWidth] = useState<number>(loadDrawerWidth);
   const [resizing, setResizing] = useState(false);
   const [filter, setFilter] = useState('');
+  const [hideViewed, setHideViewed] = useState<boolean>(() => localStorage.getItem(HIDE_VIEWED_KEY) === 'true');
+  const [editor, setEditor] = useEditor();
+  const review = useViewed(reviewScope, files);
+  const { viewed, setViewed, rememberLast } = review;
   const [text, setText] = useState<string | null>(null);
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
   const [paneError, setPaneError] = useState<string | null>(null);
@@ -196,17 +210,18 @@ export function ChangeSetView({
   // In all-files mode, selecting a file scrolls to it instead of reloading.
   useEffect(() => {
     if (!allFiles || !activeFile || text === null) return;
-    const headers = renderRef.current?.querySelectorAll('.d2h-file-name') ?? [];
-    const header = [...headers].find((el) => el.textContent?.trim().endsWith(activeFile.path));
-    header?.closest('.d2h-file-wrapper')?.scrollIntoView({ block: 'start' });
+    renderRef.current
+      ?.querySelector(`.d2h-file-wrapper[data-file="${CSS.escape(activeFile.path)}"]`)
+      ?.scrollIntoView({ block: 'start' });
   }, [allFiles, activeFile, text]);
 
   const selectFile = useCallback(
     (file: ChangeSetFile) => {
       setActivePath(file.path);
       window.history.replaceState(null, '', hrefForFile(file.path));
+      rememberLast(file.path);
     },
-    [hrefForFile],
+    [hrefForFile, rememberLast],
   );
 
   // A picked commit keeps the panel open and is scrolled into view.
@@ -236,10 +251,56 @@ export function ChangeSetView({
     [commits, onSelectCommit],
   );
 
-  const visibleFiles = useMemo(() => {
+  const matchingFiles = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files;
   }, [files, filter]);
+
+  // Hidden viewed files stay listed while they are the open one.
+  const visibleFiles = useMemo(
+    () => (hideViewed ? matchingFiles.filter((f) => !viewed.has(f.path) || f.path === activeFile?.path) : matchingFiles),
+    [matchingFiles, hideViewed, viewed, activeFile],
+  );
+
+  /** Mark or unmark a file; with `advance`, marking moves on to the next unviewed file. */
+  const toggleViewed = useCallback(
+    (path: string, value: boolean, advance: boolean) => {
+      setViewed([path], value);
+      if (!value || !advance) return;
+      const next = nextUnviewed(matchingFiles, new Set(viewed).add(path), path);
+      const file = next === null ? null : matchingFiles.find((f) => f.path === next);
+      if (!file) return;
+      selectFile(file);
+      document.querySelector(`.file-list [data-path="${CSS.escape(file.path)}"]`)?.scrollIntoView({ block: 'nearest' });
+    },
+    [setViewed, matchingFiles, viewed, selectFile],
+  );
+
+  const openUrl = useCallback(
+    (path: string, line: number | null) => editorUrl(editor, joinPath(worktreePath, path), line),
+    [editor, worktreePath],
+  );
+
+  // In the all-files view a viewed file folds in place; in the one-file view marking it moves on.
+  const paneReview = useMemo<PaneReview | null>(
+    () =>
+      reviewScope ? { viewed, collapse: allFiles, onToggle: (path, value) => toggleViewed(path, value, !allFiles) } : null,
+    [reviewScope, viewed, allFiles, toggleViewed],
+  );
+
+  const toggleHideViewed = (value: boolean) => {
+    setHideViewed(value);
+    localStorage.setItem(HIDE_VIEWED_KEY, String(value));
+  };
+
+  const changeEditor = (id: EditorId) => {
+    if (id !== 'custom') return setEditor({ ...editor, editor: id });
+    const template = window.prompt(
+      'Editor URL, with {path} for the absolute file path and {line} for the line.\nExample: idea://open?file={path}&line={line}',
+      editor.template || 'idea://open?file={path}&line={line}',
+    );
+    if (template && template.includes('{path}')) setEditor({ editor: 'custom', template });
+  };
 
   const toggleDrawer = useCallback(() => {
     setDrawerOpen((open) => {
@@ -300,7 +361,8 @@ export function ChangeSetView({
     applyDrawerWidth(needed + Math.max(0, scrollbar));
   }, [applyDrawerWidth]);
 
-  // --- keyboard: j/k or arrows move between files, f toggles the drawer, w whitespace, [ ] between commits
+  // --- keyboard: j/k or arrows move between files, f toggles the drawer, w whitespace, [ ] between commits,
+  // v marks the open file viewed (and moves on), o opens it in the editor
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -313,6 +375,23 @@ export function ChangeSetView({
       if (e.key === 'w') {
         e.preventDefault();
         onDiffOptionsChange({ ignoreWhitespace: !diffOptions.ignoreWhitespace });
+        return;
+      }
+      if (e.key === 'v') {
+        if (!activeFile || !reviewScope) return;
+        e.preventDefault();
+        toggleViewed(activeFile.path, !viewed.has(activeFile.path), true);
+        return;
+      }
+      if (e.key === 'o') {
+        if (!activeFile || activeFile.status === 'D') return;
+        const wrapper = renderRef.current?.querySelector<HTMLElement>(
+          `.d2h-file-wrapper[data-file="${CSS.escape(activeFile.path)}"]`,
+        );
+        const url = openUrl(activeFile.path, Number(wrapper?.dataset.line) || null);
+        if (!url) return;
+        e.preventDefault();
+        window.location.assign(url);
         return;
       }
       if (e.key === '[' || e.key === ']') {
@@ -335,7 +414,20 @@ export function ChangeSetView({
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [visibleFiles, activeFile, selectFile, toggleDrawer, onSelectCommit, stepCommit, diffOptions, onDiffOptionsChange]);
+  }, [
+    visibleFiles,
+    activeFile,
+    selectFile,
+    toggleDrawer,
+    onSelectCommit,
+    stepCommit,
+    diffOptions,
+    onDiffOptionsChange,
+    reviewScope,
+    viewed,
+    toggleViewed,
+    openUrl,
+  ]);
 
   const changeFormat = (f: DiffFormat) => {
     setFormat(f);
@@ -343,6 +435,7 @@ export function ChangeSetView({
   };
 
   const activeIndex = activeFile ? files.indexOf(activeFile) + 1 : 0;
+  const worktreeUrl = editorUrl(editor, worktreePath);
 
   // With whitespace ignored, a file whose only changes are whitespace comes back without hunks.
   const whitespaceOnly =
@@ -367,6 +460,11 @@ export function ChangeSetView({
           <h1>{title}</h1>
           {badge}
           <span className="path muted" title={subtitle}>{subtitle}</span>
+          {worktreeUrl && (
+            <a className="open-worktree" href={worktreeUrl} title={`Open this worktree in ${editorLabel(editor)}`}>
+              Open in {editorLabel(editor)}
+            </a>
+          )}
         </div>
         <div className="diff-meta">{meta}</div>
       </div>
@@ -428,19 +526,37 @@ export function ChangeSetView({
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               />
+              {reviewScope && (
+                <label className="check" title="Leave viewed files out of the list (the open file stays)">
+                  <input type="checkbox" checked={hideViewed} onChange={(e) => toggleHideViewed(e.target.checked)} /> Hide
+                  viewed
+                </label>
+              )}
             </div>
-            <ul className="file-list">
+            <ul className={`file-list${reviewScope ? ' has-viewed' : ''}`}>
               {visibleFiles.map((f) => {
                 const [dir, name] = splitPath(f.path);
                 const areaLabel = f.area ? AREA_LABEL[f.area] : null;
+                const isViewed = viewed.has(f.path);
                 return (
                   <li
                     key={f.path}
                     data-path={f.path}
-                    className={f.path === activeFile?.path ? 'is-active' : undefined}
+                    className={[f.path === activeFile?.path && 'is-active', isViewed && 'is-viewed'].filter(Boolean).join(' ') || undefined}
                     title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
                     onClick={() => selectFile(f)}
                   >
+                    {reviewScope && (
+                      <input
+                        type="checkbox"
+                        className="viewed-check"
+                        checked={isViewed}
+                        title={isViewed ? 'Viewed. Click to mark as not viewed.' : 'Mark as viewed (v)'}
+                        aria-label={`Viewed: ${f.path}`}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => toggleViewed(f.path, e.target.checked, false)}
+                      />
+                    )}
                     <span className={`status status-${f.status}`} title={statusName(f.status)}>{f.status}</span>
                     <span className="name">
                       <span>
@@ -462,7 +578,9 @@ export function ChangeSetView({
                 );
               })}
               {files.length === 0 && <li className="empty">{loading ?? emptyMessage}</li>}
-              {files.length > 0 && visibleFiles.length === 0 && <li className="empty">No files match the filter.</li>}
+              {files.length > 0 && visibleFiles.length === 0 && (
+                <li className="empty">{matchingFiles.length > 0 ? 'Every file is viewed.' : 'No files match the filter.'}</li>
+              )}
             </ul>
           </div>
           <div
@@ -492,6 +610,17 @@ export function ChangeSetView({
                 <span className="muted"> {activeIndex}/{files.length}</span>
               )}
             </button>
+            {reviewScope && files.length > 0 && (
+              <span
+                className={`viewed-progress${viewed.size === files.length ? ' is-done' : ''}`}
+                title="Files marked as viewed. A mark is dropped when the file changes. v marks the open file and moves on."
+              >
+                <span className="viewed-bar" aria-hidden="true">
+                  <span style={{ width: `${(viewed.size / files.length) * 100}%` }} />
+                </span>
+                {viewed.size} / {files.length} viewed
+              </span>
+            )}
             {!drawerOpen && activeFile && (
               <span className="toolbar-file mono" title={activeFile.path}>
                 {activeFile.path}
@@ -531,6 +660,16 @@ export function ChangeSetView({
               </select>
             </label>
             <span className="spacer" />
+            <label className="check" title="The editor that file links and the o key open">
+              Editor
+              <select className="toolbar-select" value={editor.editor} onChange={(e) => changeEditor(e.target.value as EditorId)}>
+                {EDITORS.map((ed) => (
+                  <option key={ed.id} value={ed.id}>
+                    {ed.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <a className="btn btn-quiet" href={patchHref} download>
               Download .patch
             </a>
@@ -539,6 +678,9 @@ export function ChangeSetView({
             <DiffPane
               text={text}
               format={format}
+              review={paneReview}
+              openUrl={editor.editor === 'none' ? null : openUrl}
+              singlePath={allFiles ? null : (activeFile?.path ?? null)}
               loading={loading ?? loadingLabel}
               error={error ?? paneError}
               notice={

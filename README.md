@@ -76,6 +76,40 @@ untracked files shown as new files. Each file is labelled staged, staged +
 unstaged, untracked or conflict. Reachable from the Overview badge and from
 the Diff header; a Refresh button re-reads the working tree.
 
+**Mark files as viewed** – on every diff screen (branch diff, single commit,
+uncommitted changes) each file has a *Viewed* checkbox, in the file list and
+in the diff header. `v` marks the open file and moves on to the next file not
+yet viewed (pressing it on a viewed file unmarks it). The toolbar shows
+*N / M viewed*, viewed files are struck through in the list, and *Hide viewed*
+leaves them out of it. In "All files" mode a viewed file folds down to its
+header. Without a `file` in the URL, a screen reopens the file you had open
+last.
+
+A mark belongs to one worktree and to what it is compared with (the base, the
+commit, or the uncommitted changes), and to the content the file had when you
+marked it: once the file changes, it shows as not viewed again. For committed
+diffs that content is the pair of blob ids `git diff --raw` reports; for
+uncommitted files it is the `HEAD` blob plus the working-tree file's size and
+modification time, which change whenever the file is saved. Marks are kept in
+the browser (`localStorage`), pruned to the files still listed, and capped,
+so old reviews drop out by themselves. The Overview's **Viewed** column shows
+the progress of each branch diff against the current base, as long as the
+diff has not changed since.
+
+**Open in editor** – the header of each file in the diff has an *Open* link
+that opens the worktree's copy of the file in your editor, at the first
+changed line; clicking a line number on the new side opens it at that line,
+and `o` opens the current file. *Open in …* next to the worktree path (and
+*Open* on each Overview row) opens the whole worktree. Pick the editor in the
+toolbar: VS Code, VS Code Insiders, Cursor, Windsurf, Zed, a custom URL such
+as `idea://open?file={path}&line={line}`, or none. These are plain
+`vscode://`-style links that your browser hands to the editor; the server
+does not launch anything.
+
+Keys on the diff screens: `j`/`k` (or arrows) next/previous file, `v` viewed,
+`o` open in editor, `f` file list, `w` whitespace, `]`/`[` next/previous
+commit.
+
 ## Install
 
 Requires git on `PATH` and Node 18.17+ to run (20.9+ to develop).
@@ -167,7 +201,8 @@ lib/api.ts            jsonRoute() helper and error-to-status mapping
 lib/git.ts            git wrappers + parsers (worktree list, raw/numstat, status v2, merge-tree)
 lib/repo-service.ts   RepoService: summary / diff / file / patch / merge status, caching
 lib/context.ts        one RepoService per process, bound to WTDIFF_CWD
-lib/client/           browser helpers: fetch, URL builders, formatting, localStorage
+lib/client/           browser helpers: fetch, URL builders, formatting, localStorage,
+                      diff options, viewed marks (viewed.ts), editor links (editor.ts)
 app/                  Next.js app: layout, pages, dev-only API routes, styles
 components/           Overview, OverviewTable (TanStack), ChangeSetView (file drawer + diff pane) used by
                       DiffView (committed) and UncommittedView, DiffPane (diff2html), TopBar, ...
@@ -183,7 +218,7 @@ API (all `GET`, JSON unless noted):
 | `/api/branches`    | `refresh?`                             | local and remote branches (cached 60 s)      |
 | `/api/summary`     | `worktree`, `base`                     | ahead/behind, merge status, file/line totals |
 | `/api/uncommitted` | `worktree`                             | counts of changed and untracked files        |
-| `/api/diff`        | `worktree`, `base`                     | summary + commits + file list                |
+| `/api/diff`        | `worktree`, `base`                     | summary + commits + file list (with blob ids) |
 | `/api/file`        | `worktree`, `base`, `path`, `oldPath?` | unified diff of one file                     |
 | `/api/patch`       | `worktree`, `base`                     | whole diff as `text/x-patch` download        |
 | `/api/commit`      | `worktree`, `commit`                   | one commit vs its first parent: metadata, parents, file list |
@@ -216,12 +251,9 @@ Ideas for later versions, roughly in order of usefulness:
 
 - **Expand collapsed lines** between hunks on demand (the whole-file context
   covers most of it today).
-- **Review aids** – mark files as viewed, collapse viewed files, remember
-  position per worktree/base.
 - **Compare two worktrees directly**, not only worktree vs base branch.
 - **Multiple repositories** in one overview (pass several `--cwd` roots).
 - **Live refresh** – watch `.git` for new commits and update the overview.
-- **Open in editor** links (`vscode://file/...`).
 
 ## CI
 

@@ -17,7 +17,9 @@ import {
 import type { MergeStatus, SummaryPayload, UncommittedPayload, WorktreeRow } from '@/lib/repo-service';
 import { hrefDiff, hrefUncommitted } from '@/lib/client/api';
 import { displayPath, fmtNum, worktreeLabel } from '@/lib/client/format';
+import { editorLabel, editorUrl, loadEditor } from '@/lib/client/editor';
 import { loadJson, saveJson } from '@/lib/client/storage';
+import { reviewScopeId, scopeProgress, useViewedStore, type ViewedStore } from '@/lib/client/viewed';
 import { MergeTags, Skeleton, UncommittedTag, WorktreeTags } from './Tags';
 
 export interface OverviewRow {
@@ -41,7 +43,7 @@ interface Persisted {
 }
 
 const STORAGE_KEY = 'wtdiff.overview.table.v1';
-const DEFAULT_ORDER = ['branch', 'path', 'ahead', 'behind', 'merge', 'files', 'lines', 'uncommitted'];
+const DEFAULT_ORDER = ['branch', 'path', 'ahead', 'behind', 'merge', 'files', 'lines', 'viewed', 'uncommitted'];
 const DEFAULTS: Persisted = {
   sorting: [],
   columnOrder: DEFAULT_ORDER,
@@ -58,6 +60,13 @@ function mergeRank(m: MergeStatus | null | undefined): number | undefined {
   if (m.state === 'merged') return m.via === 'squash' ? 2 : 1;
   if (m.state === 'unmerged') return m.conflicts?.length ? 4 : 3;
   return 5;
+}
+
+/** Files marked viewed on the Diff screen, while the diff is still the one they were marked in. */
+function viewedProgress(store: ViewedStore, repoRoot: string, base: string, r: OverviewRow) {
+  const s = r.summary;
+  if (!s?.mergeBase) return null;
+  return scopeProgress(store, reviewScopeId(repoRoot, s.worktree.path, { base }), `${s.mergeBase}..${s.worktree.head}`);
 }
 
 function matchesMerge(row: OverviewRow, f: MergeFilter): boolean {
@@ -85,6 +94,8 @@ export function OverviewTable({ rows, base, repoRoot }: { rows: OverviewRow[]; b
   const patch = (p: Partial<Persisted>) => setPersisted((s) => ({ ...s, ...p }));
 
   useEffect(() => saveJson(STORAGE_KEY, persisted), [persisted]);
+  const viewedStore = useViewedStore();
+  const [editor] = useState(loadEditor);
 
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -181,6 +192,28 @@ export function OverviewTable({ rows, base, repoRoot }: { rows: OverviewRow[]; b
         },
       },
       {
+        id: 'viewed',
+        header: 'Viewed',
+        accessorFn: (r) => {
+          const p = viewedProgress(viewedStore, repoRoot, base, r);
+          return p ? p.viewed / Math.max(1, p.total) : undefined;
+        },
+        sortUndefined: 'last',
+        meta: {
+          num: true,
+          title: 'Files marked as viewed on the Diff screen (in this browser), out of the files in the diff. Shown while the diff is unchanged since.',
+        },
+        cell: ({ row }) => {
+          const p = viewedProgress(viewedStore, repoRoot, base, row.original);
+          if (!p) return <span className="muted">–</span>;
+          return (
+            <span className={p.viewed === p.total ? 'viewed-all' : undefined}>
+              {fmtNum(p.viewed)}/{fmtNum(p.total)}
+            </span>
+          );
+        },
+      },
+      {
         id: 'uncommitted',
         header: 'Uncommitted',
         accessorFn: (r) => (r.uncommitted ? r.uncommitted.changed + r.uncommitted.untracked : undefined),
@@ -210,24 +243,47 @@ export function OverviewTable({ rows, base, repoRoot }: { rows: OverviewRow[]; b
         header: '',
         enableSorting: false,
         enableHiding: false,
-        cell: ({ row }) =>
-          isDisabled(row.original.wt, base) ? null : (
-            <Link href={hrefDiff(row.original.wt.path, base)} onClick={(e) => e.stopPropagation()}>
-              View diff
-            </Link>
-          ),
+        cell: ({ row }) => {
+          const wt = row.original.wt;
+          const open = wt.bare || wt.prunable ? null : editorUrl(editor, wt.path);
+          return (
+            <span className="row-actions">
+              {!isDisabled(wt, base) && (
+                <Link href={hrefDiff(wt.path, base)} onClick={(e) => e.stopPropagation()}>
+                  View diff
+                </Link>
+              )}
+              {open && (
+                <a href={open} onClick={(e) => e.stopPropagation()} title={`Open this worktree in ${editorLabel(editor)}`}>
+                  Open
+                </a>
+              )}
+            </span>
+          );
+        },
       },
     ],
-    [repoRoot, base],
+    [repoRoot, base, viewedStore, editor],
   );
+
+  // Columns added in later versions join a saved layout at their default place.
+  const fullOrder = useMemo(() => {
+    const order = [...columnOrder];
+    DEFAULT_ORDER.forEach((id, i) => {
+      if (order.includes(id)) return;
+      const after = DEFAULT_ORDER.slice(0, i).reverse().find((prev) => order.includes(prev));
+      order.splice(after ? order.indexOf(after) + 1 : 0, 0, id);
+    });
+    return order;
+  }, [columnOrder]);
 
   const table = useReactTable({
     data: filtered,
     columns,
-    state: { sorting, columnOrder: [...columnOrder, 'actions'], columnVisibility },
+    state: { sorting, columnOrder: [...fullOrder, 'actions'], columnVisibility },
     onSortingChange: (u) => patch({ sorting: typeof u === 'function' ? u(sorting) : u }),
     onColumnOrderChange: (u) => {
-      const next = (typeof u === 'function' ? u(columnOrder) : u).filter((id) => id !== 'actions');
+      const next = (typeof u === 'function' ? u(fullOrder) : u).filter((id) => id !== 'actions');
       patch({ columnOrder: next });
     },
     onColumnVisibilityChange: (u) => patch({ columnVisibility: typeof u === 'function' ? u(columnVisibility) : u }),
@@ -255,7 +311,7 @@ export function OverviewTable({ rows, base, repoRoot }: { rows: OverviewRow[]; b
     setDragging(null);
     setDragOver(null);
     if (!sourceId || sourceId === targetId) return;
-    const order = columnOrder.filter((id) => id !== sourceId);
+    const order = fullOrder.filter((id) => id !== sourceId);
     const at = order.indexOf(targetId);
     order.splice(at === -1 ? order.length : at, 0, sourceId);
     patch({ columnOrder: order });

@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { UncommittedFilePayload, UncommittedFilesPayload } from '@/lib/repo-service';
 import { api, hrefDiff, hrefOverview, hrefUncommitted, hrefUncommittedPatch } from '@/lib/client/api';
 import { diffOptionParams, useDiffOptions, withDiffOptions } from '@/lib/client/diff-options';
 import { fmtNum, worktreeLabel } from '@/lib/client/format';
+import { reviewScopeId, type ReviewScope } from '@/lib/client/viewed';
 import { ChangeSetView, type ChangeSetFile } from './ChangeSetView';
 import { useRepo } from './RepoProvider';
 import { Tag } from './Tags';
@@ -75,6 +76,11 @@ export function UncommittedView() {
     [worktree, base, diffOptions],
   );
 
+  const reviewScope = useMemo<ReviewScope | null>(
+    () => (repo && data ? { id: reviewScopeId(repo.repoRoot, data.worktree.path, 'uncommitted') } : null),
+    [repo, data],
+  );
+
   if (!worktree) return <div className="error">No worktree selected. Go back to the overview.</div>;
   if (error) return <div className="error">{error}</div>;
   if (!repo || !data) return <div className="loading">Loading uncommitted changes…</div>;
@@ -107,6 +113,8 @@ export function UncommittedView() {
 
   return (
     <ChangeSetView
+      reviewScope={reviewScope}
+      worktreePath={wt.path}
       scopeKey={`uncommitted\0${worktree}\0${version}\0${reloads}\0${diffOptions.context}\0${diffOptions.ignoreWhitespace}`}
       nav={
         <>

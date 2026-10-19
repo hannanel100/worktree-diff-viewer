@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { CommitFilePayload, CommitPayload, DiffPayload, FilePayload, UncommittedPayload } from '@/lib/repo-service';
 import { api, hrefCommitPatch, hrefDiff, hrefOverview, hrefPatch, hrefUncommitted } from '@/lib/client/api';
 import { diffOptionParams, useDiffOptions, withDiffOptions } from '@/lib/client/diff-options';
 import { fmtNum, relTime, worktreeLabel } from '@/lib/client/format';
+import { reviewScopeId, type ReviewScope } from '@/lib/client/viewed';
 import { ChangeSetView, type ChangeSetFile } from './ChangeSetView';
 import { useRepo } from './RepoProvider';
 import { MergeTags, Tag } from './Tags';
@@ -118,6 +119,17 @@ export function DiffView() {
     [worktree, base, commitSha, diffOptions],
   );
 
+  // Viewed marks belong to the base for the whole branch, or to the commit.
+  // The branch scope records merge base..head so the Overview can show progress.
+  const reviewScope = useMemo<ReviewScope | null>(() => {
+    if (!repo || !data) return null;
+    if (commitSha) {
+      return commitData ? { id: reviewScopeId(repo.repoRoot, data.worktree.path, { commit: commitData.commit.sha }) } : null;
+    }
+    if (!data.mergeBase) return null;
+    return { id: reviewScopeId(repo.repoRoot, data.worktree.path, { base }), rev: `${data.mergeBase}..${data.worktree.head}` };
+  }, [repo, data, base, commitSha, commitData]);
+
   if (!worktree) return <div className="error">No worktree selected. Go back to the overview.</div>;
   if (error) return <div className="error">{error}</div>;
   if (!repo || !data) return <div className="loading">Loading diff…</div>;
@@ -210,6 +222,8 @@ export function DiffView() {
 
   return (
     <ChangeSetView
+      reviewScope={reviewScope}
+      worktreePath={wt.path}
       scopeKey={`diff\0${worktree}\0${base}\0${version}\0${commitSha ?? ''}\0${diffOptions.context}\0${diffOptions.ignoreWhitespace}`}
       nav={
         <>

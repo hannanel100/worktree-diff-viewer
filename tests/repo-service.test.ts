@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
 import { normalizePath } from '@/lib/git';
@@ -69,6 +73,11 @@ describe('RepoService', () => {
     expect(byPath['staged.txt']).toMatchObject({ status: 'A', area: 'staged', additions: 1, deletions: 0 });
     expect(byPath['scratch.txt']).toMatchObject({ status: 'A', area: 'untracked', additions: 1, deletions: 0, binary: false });
     expect(u.totals).toEqual({ files: 3, additions: 3, deletions: 0 });
+    // The working tree has no blob id: its side is stamped with size and mtime instead.
+    const stat = fs.statSync(path.join(fx.featureDir, 'lib/b.js'));
+    expect(byPath['lib/b.js']).toMatchObject({ blob: null, stamp: `${stat.size}:${Math.trunc(stat.mtimeMs)}` });
+    expect(byPath['lib/b.js'].oldBlob).toMatch(/^[0-9a-f]{40}$/);
+    expect(byPath['scratch.txt']).toMatchObject({ oldBlob: null, blob: null });
 
     const clean = await service.uncommittedFiles({ worktree: fx.mainDir });
     expect(clean.files).toEqual([]);
@@ -166,6 +175,16 @@ describe('RepoService', () => {
     expect(byPath['assets/logo.bin']).toMatchObject({ status: 'M', binary: true });
     expect(byPath['new-name.txt']).toMatchObject({ status: 'R', oldPath: 'old-name.txt', similarity: 100 });
     expect(byPath['README.md'], 'changes made on main after the fork must not appear').toBeUndefined();
+  });
+
+  test('diff files carry full blob ids of both sides, so a reviewer can tell when a file changed', async () => {
+    const d = await service.diff({ worktree: fx.featureDir, base: 'main' });
+    const byPath = Object.fromEntries(d.files.map((f) => [f.path, f]));
+    const blobOf = (rev: string, file: string) => execFileSync('git', ['rev-parse', `${rev}:${file}`], { cwd: fx.mainDir, encoding: 'utf8' }).trim();
+    expect(byPath['lib/a.js']).toMatchObject({ oldBlob: blobOf(fx.shas.c1, 'lib/a.js'), blob: blobOf(fx.shas.f2, 'lib/a.js') });
+    expect(byPath['lib/b.js']).toMatchObject({ oldBlob: null, blob: blobOf(fx.shas.f2, 'lib/b.js') });
+    expect(byPath['gone.txt']).toMatchObject({ oldBlob: blobOf(fx.shas.c1, 'gone.txt'), blob: null });
+    expect(byPath['new-name.txt']).toMatchObject({ oldBlob: blobOf(fx.shas.c1, 'old-name.txt'), blob: blobOf(fx.shas.f2, 'new-name.txt') });
   });
 
   test('file diff returns a unified patch and ignores uncommitted edits', async () => {
