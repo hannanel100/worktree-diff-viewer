@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Developing needs Node 20.9+ (Next.js 16); Windows is where git is slowest.
+          - { os: ubuntu-latest, node: 20 }
+          - { os: ubuntu-latest, node: 22 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: windows-latest, node: 22 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        run: npm pack && mv hannanel100-worktree-diff-viewer-*.tgz package.tgz
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        with:
+          name: package
+          path: package.tgz
+          retention-days: 7
+
+  # Installs the packed tarball the way a teammate would and runs it on the
+  # oldest Node the package claims to support (engines: >=18.17).
+  smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 18.17
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+      - run: npm install -g ./package.tgz
+      - run: wtdiff --version
+      - name: Serve this repository and query it
+        run: |
+          wtdiff --no-open --port 4747 --strict-port --cwd . > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:4747/api/repo > repo.json && break
+            sleep 1
+          done
+          cat server.log
+          node -e "const r = require('./repo.json'); if (!r.worktrees?.length) throw new Error('no worktrees in /api/repo')"
+          curl -sf http://127.0.0.1:4747/ | grep -qi '<html'

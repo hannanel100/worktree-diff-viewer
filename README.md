@@ -223,19 +223,41 @@ Ideas for later versions, roughly in order of usefulness:
 - **Live refresh** – watch `.git` for new commits and update the overview.
 - **Open in editor** links (`vscode://file/...`).
 
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+- typecheck, tests and build on Ubuntu with Node 20, 22 and 24, and on Windows
+  with Node 22 (where git is slowest);
+- a smoke job that installs the `npm pack` tarball globally on Node 18.17 (the
+  oldest version `engines` allows), starts `wtdiff` on this repository and
+  checks that `/api/repo` and the UI answer. It catches a missing file in
+  `files` or a server bundle that needs a newer Node.
+
 ## Publishing to npm
 
 The package ships only `bin/`, `dist/server.mjs` and the static `out/`; it has
 no runtime dependencies, so `npx` starts it in seconds.
 
-1. Pick the final name in `package.json`, e.g. `@hannanel100/worktree-diff-viewer`
-   (scoped packages can be published privately, or to GitHub Packages /
-   Verdaccio).
-2. Bump the version and run `npm publish` (add `--access public` for a public
-   scoped package, or set `publishConfig.registry` for a private one).
-   `prepublishOnly` builds and tests first.
-3. Teammates install with `npm i -g @hannanel100/worktree-diff-viewer` or run
-   ad hoc with `npx @hannanel100/worktree-diff-viewer`.
+Releases are published by `.github/workflows/release.yml` when a `v*` tag is
+pushed:
+
+1. Bump `version` in `package.json`, commit (`Release vX.Y.Z`) and tag it
+   `vX.Y.Z`.
+2. `git push origin main vX.Y.Z`. The workflow checks that the tag matches
+   `package.json`, runs `npm publish` (`prepublishOnly` builds and tests
+   first) and creates a GitHub release with generated notes.
+
+Publishing uses npm [trusted publishing](https://docs.npmjs.com/trusted-publishers),
+so there is no npm token in the repository. The package's settings on
+npmjs.com need a GitHub Actions trusted publisher once: owner `hannanel100`,
+repository `worktree-diff-viewer`, workflow `release.yml`. The published
+version then carries a provenance attestation. Don't also run `npm publish`
+locally for a tagged version, because npm refuses to publish the same version
+twice.
+
+Teammates install with `npm i -g @hannanel100/worktree-diff-viewer` or run
+ad hoc with `npx @hannanel100/worktree-diff-viewer`.
 
 Without a registry, `npm i -g git+ssh://git@github.com/<org>/worktree-diff-viewer.git`
 also works if a `"prepare": "npm run build"` script is added, at the cost of
